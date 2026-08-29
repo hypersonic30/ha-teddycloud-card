@@ -22,6 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
+const CARD_VERSION = "0.1.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -565,3 +566,12 @@ window.customCards.push({
   description: "Shows a Toniebox's online status, current Tonie, and teddyCloud controls.",
   preview: false,
 });
+
+// Printed on load so it's obvious in devtools which build is actually
+// active — useful since browsers cache this file aggressively and a HACS
+// update alone doesn't guarantee the new file is what's running.
+console.info(
+  `%c TEDDYCLOUD-CARD %c v${CARD_VERSION} `,
+  "color: white; background: #039be5; font-weight: 700;",
+  "color: #039be5; background: white; font-weight: 700;"
+);
