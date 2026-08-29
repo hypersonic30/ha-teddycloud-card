@@ -31,6 +31,11 @@ function esc(value) {
   return String(value).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
 }
 
+const UNAVAILABLE_STATES = new Set(["unknown", "unavailable"]);
+function hasState(entity) {
+  return !!entity && !UNAVAILABLE_STATES.has(entity.state);
+}
+
 function fmtRelative(dateStr) {
   if (!dateStr) return null;
   const date = new Date(dateStr);
@@ -85,6 +90,7 @@ class TeddyCloudCard extends HTMLElement {
     this._config = { show_controls: true, ...config };
     this._configEntityIds = ENTITY_FIELDS.map(({ key }) => config[key]).filter(Boolean);
     this._render();
+    this._ensureRelativeTimeTimer();
   }
 
   set hass(hass) {
@@ -104,17 +110,30 @@ class TeddyCloudCard extends HTMLElement {
   }
 
   connectedCallback() {
-    // Nothing else re-renders "Last Connection" while the box stays
-    // continuously connected (that timestamp doesn't change), so give it
-    // its own timer independent of entity state changes.
-    if (!this._relativeTimeInterval) {
-      this._relativeTimeInterval = setInterval(() => this._render(), 30000);
-    }
+    this._ensureRelativeTimeTimer();
   }
 
   disconnectedCallback() {
     clearInterval(this._relativeTimeInterval);
     this._relativeTimeInterval = null;
+  }
+
+  _ensureRelativeTimeTimer() {
+    if (this._relativeTimeInterval || !this._config?.entity_last_connection) return;
+    // Nothing else re-renders "Last Connection" while the box stays
+    // continuously connected (that timestamp doesn't change), so give it its
+    // own timer — updating just the text node directly rather than calling
+    // the full _render(), so it can't interrupt an open dropdown or a
+    // switch the user is mid-click on.
+    this._relativeTimeInterval = setInterval(() => this._updateRelativeTime(), 30000);
+  }
+
+  _updateRelativeTime() {
+    const el = this.shadowRoot?.getElementById("last-connection-text");
+    if (!el) return;
+    const lastConnection = this._entity("entity_last_connection");
+    if (!hasState(lastConnection)) return;
+    el.textContent = fmtRelative(lastConnection.state) || lastConnection.state;
   }
 
   getCardSize() {
@@ -151,8 +170,8 @@ class TeddyCloudCard extends HTMLElement {
     const tonie = this._entity("entity_current_tonie");
     const series = this._entity("entity_current_tonie_series");
 
-    const isOnline = online ? online.state === "on" : null;
-    const cover = tonie?.attributes?.entity_picture;
+    const isOnline = hasState(online) ? online.state === "on" : null;
+    const cover = hasState(tonie) ? tonie.attributes?.entity_picture : null;
     const title = this._config.title || online?.attributes?.friendly_name?.replace(/\s*Online\s*$/, "") || "TeddyCloud";
 
     this.shadowRoot.innerHTML = `
@@ -173,18 +192,18 @@ class TeddyCloudCard extends HTMLElement {
         </div>
 
         <div class="tonie-info">
-          <div class="tonie-title">${tonie?.state && tonie.state !== "unknown" ? esc(tonie.state) : "No Tonie recorded yet"}</div>
-          ${series?.state && series.state !== "unknown" ? `<div class="tonie-series">${esc(series.state)}</div>` : ""}
+          <div class="tonie-title">${hasState(tonie) ? esc(tonie.state) : "No Tonie recorded yet"}</div>
+          ${hasState(series) ? `<div class="tonie-series">${esc(series.state)}</div>` : ""}
         </div>
 
         <div class="status-row">
           ${
-            lastConnection?.state && lastConnection.state !== "unknown"
-              ? `<div class="status-item"><ha-icon icon="mdi:clock-outline"></ha-icon><span>${esc(fmtRelative(lastConnection.state) || lastConnection.state)}</span></div>`
+            hasState(lastConnection)
+              ? `<div class="status-item"><ha-icon icon="mdi:clock-outline"></ha-icon><span id="last-connection-text">${esc(fmtRelative(lastConnection.state) || lastConnection.state)}</span></div>`
               : ""
           }
           ${
-            lastIp?.state && lastIp.state !== "unknown"
+            hasState(lastIp)
               ? `<div class="status-item"><ha-icon icon="mdi:ip-network"></ha-icon><span>${esc(lastIp.state)}</span></div>`
               : ""
           }
@@ -219,7 +238,7 @@ class TeddyCloudCard extends HTMLElement {
           <div class="control-row">
             <ha-icon icon="${icon}"></ha-icon>
             <span class="control-label">${label}</span>
-            <ha-switch data-key="${key}" data-entity="${this._config[key]}" ${isOn ? "checked" : ""}></ha-switch>
+            <ha-switch data-key="${key}" data-entity="${esc(this._config[key])}" ${isOn ? "checked" : ""}></ha-switch>
           </div>
         `;
       })
@@ -233,8 +252,8 @@ class TeddyCloudCard extends HTMLElement {
         return `
           <div class="control-row">
             <span class="control-label">${label}</span>
-            <select data-key="${key}" data-entity="${this._config[key]}" class="option-select">
-              ${options.map((opt) => `<option value="${opt}" ${opt === state.state ? "selected" : ""}>${opt}</option>`).join("")}
+            <select data-key="${key}" data-entity="${esc(this._config[key])}" class="option-select">
+              ${options.map((opt) => `<option value="${esc(opt)}" ${opt === state.state ? "selected" : ""}>${esc(opt)}</option>`).join("")}
             </select>
           </div>
         `;
