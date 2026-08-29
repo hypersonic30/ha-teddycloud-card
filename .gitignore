@@ -1,0 +1,4 @@
+.DS_Store
+
+# Never commit push credentials
+.git-token-*
