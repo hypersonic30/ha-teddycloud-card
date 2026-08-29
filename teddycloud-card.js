@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.1.0";
+const CARD_VERSION = "0.2.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -79,7 +79,7 @@ function fmtRelative(dateStr) {
 
 function svgBox() {
   return `
-    <svg class="box-graphic" viewBox="0 0 200 200" preserveAspectRatio="xMidYMax meet" aria-hidden="true">
+    <svg id="box-fallback" class="box-graphic" viewBox="0 0 200 200" preserveAspectRatio="xMidYMax meet" aria-hidden="true">
       <rect x="30" y="70" width="140" height="110" rx="18" class="box-body" />
       <rect x="30" y="70" width="140" height="28" rx="14" class="box-lid" />
       <circle cx="75" cy="135" r="9" class="box-eye" />
@@ -237,6 +237,7 @@ class TeddyCloudCard extends HTMLElement {
 
         <div class="hero">
           ${svgBox()}
+          <img class="box-photo is-hidden" id="box-photo" alt="" />
           <img class="cover is-hidden" id="cover-img" alt="" />
         </div>
 
@@ -279,6 +280,22 @@ class TeddyCloudCard extends HTMLElement {
     if (isOnline !== null) {
       pill.textContent = isOnline ? "Online" : "Offline";
       pill.className = `pill ${isOnline ? "on" : "off"}`;
+    }
+
+    // Same approach teddyCloud's own web UI uses: a real product photo from
+    // Tonies' CDN, keyed by box model, with the Tonie figure's own (already
+    // transparent) cutout image absolutely positioned over it — no filled
+    // background behind either image.
+    const boxModel = hasState(online) ? online.attributes?.box_model : null;
+    const boxPhotoUrl = boxModel ? `https://cdn.tonies.de/thumbnails/${boxModel}-i.png` : null;
+    const boxPhotoImg = root.getElementById("box-photo");
+    const boxFallback = root.getElementById("box-fallback");
+    boxPhotoImg.classList.toggle("is-hidden", !boxPhotoUrl);
+    boxFallback.classList.toggle("is-hidden", !!boxPhotoUrl);
+    if (boxPhotoUrl) {
+      boxPhotoImg.src = boxPhotoUrl;
+    } else {
+      boxPhotoImg.removeAttribute("src");
     }
 
     const cover = hasState(tonie) ? tonie.attributes?.entity_picture : null;
@@ -400,8 +417,8 @@ class TeddyCloudCard extends HTMLElement {
         position: relative;
         display: flex;
         justify-content: center;
-        align-items: flex-end;
-        height: 160px;
+        align-items: center;
+        height: 180px;
       }
       .box-graphic {
         height: 100%;
@@ -413,15 +430,22 @@ class TeddyCloudCard extends HTMLElement {
       .box-mouth { stroke: var(--primary-text-color); opacity: 0.6; }
       .box-knob { fill: var(--primary-color); }
       .box-antenna { fill: var(--primary-color); }
+      .box-photo {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      /* Matches teddyCloud's own web UI: the Tonie's own (transparent)
+         cutout image sits over the box photo's bottom-right corner, at a
+         fraction of its height — no background/shadow behind it, since
+         that's what made it read as a plain square covering the box. */
       .cover {
         position: absolute;
-        bottom: 18px;
-        width: 92px;
-        height: 92px;
-        object-fit: cover;
-        border-radius: 12px;
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-        background: var(--card-background-color);
+        bottom: 0;
+        right: 0;
+        height: 55%;
+        padding: 8px;
+        object-fit: contain;
       }
       .tonie-info {
         text-align: center;
