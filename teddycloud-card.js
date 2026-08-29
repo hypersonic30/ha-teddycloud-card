@@ -6,6 +6,18 @@
  * calls the standard switch/select services. Every field it displays is an
  * explicit entity reference in config — nothing is guessed from naming
  * conventions, so renaming entities in HA never breaks the card.
+ *
+ * The DOM tree is built exactly once (in _buildShell, on the first render
+ * after setConfig) and every subsequent hass update only patches text
+ * content/attributes in place via _updateContent — it never reassigns
+ * shadowRoot.innerHTML again. This matters beyond performance: tools like
+ * card_mod inject a <style> tag directly into this card's shadow root to
+ * theme it, and a wholesale innerHTML replacement on every entity change
+ * (e.g. every switch toggle) would silently wipe that out each time.
+ * Because nothing here is built from entity-supplied strings via innerHTML
+ * anymore (all dynamic values go through textContent/property assignment),
+ * there's also no HTML-escaping to get right — the injection class of bug
+ * that approach was prone to doesn't apply here.
  */
 
 const CARD_TAG = "teddycloud-card";
@@ -26,10 +38,18 @@ const ENTITY_FIELDS = [
   { key: "entity_led_mode", label: "LED Mode (select)", domain: "select" },
 ];
 
-const ESCAPE_MAP = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-function esc(value) {
-  return String(value).replace(/[&<>"']/g, (c) => ESCAPE_MAP[c]);
-}
+const SWITCH_FIELDS = [
+  ["entity_cloud_enabled", "Cloud Enabled", "mdi:cloud"],
+  ["entity_cache_content", "Cache Content", "mdi:cloud-download"],
+  ["entity_slap_enabled", "Slap To Skip", "mdi:gesture-tap"],
+  ["entity_slap_direction", "Slap Direction", "mdi:gesture-swipe"],
+];
+
+const SELECT_FIELDS = [
+  ["entity_max_vol_speaker", "Max Volume Speaker"],
+  ["entity_max_vol_headphones", "Max Volume Headphones"],
+  ["entity_led_mode", "LED Mode"],
+];
 
 const UNAVAILABLE_STATES = new Set(["unknown", "unavailable"]);
 function hasState(entity) {
@@ -89,6 +109,9 @@ class TeddyCloudCard extends HTMLElement {
     if (!config) throw new Error("Invalid configuration");
     this._config = { show_controls: true, ...config };
     this._configEntityIds = ENTITY_FIELDS.map(({ key }) => config[key]).filter(Boolean);
+    // Which controls exist depends only on config, so only a config change
+    // (not a routine hass update) needs to rebuild the DOM shell.
+    this._built = false;
     this._render();
     this._ensureRelativeTimeTimer();
   }
@@ -160,10 +183,85 @@ class TeddyCloudCard extends HTMLElement {
   }
 
   _render() {
-    if (!this._config) return;
+    if (!this._config || !this._hass) return;
     if (!this.shadowRoot) this.attachShadow({ mode: "open" });
-    if (!this._hass) return;
+    if (!this._built) {
+      this._buildShell();
+      this._built = true;
+    }
+    this._updateContent();
+  }
 
+  _buildShell() {
+    this._switchFields = SWITCH_FIELDS.filter(([key]) => this._config[key]);
+    this._selectFields = SELECT_FIELDS.filter(([key]) => this._config[key]);
+
+    const switchRows = this._switchFields
+      .map(
+        ([key, label, icon]) => `
+          <div class="control-row" data-row="${key}">
+            <ha-icon icon="${icon}"></ha-icon>
+            <span class="control-label">${label}</span>
+            <ha-switch id="ctrl-${key}"></ha-switch>
+          </div>
+        `
+      )
+      .join("");
+    const selectRows = this._selectFields
+      .map(
+        ([key, label]) => `
+          <div class="control-row" data-row="${key}">
+            <span class="control-label">${label}</span>
+            <select id="ctrl-${key}" class="option-select"></select>
+          </div>
+        `
+      )
+      .join("");
+    const controlsHtml =
+      this._config.show_controls && (switchRows || selectRows)
+        ? `<div class="controls">${switchRows}${selectRows}</div>`
+        : "";
+
+    // Every row that can appear/disappear at runtime (not just at config
+    // time) is always present in the shell and toggled via .is-hidden —
+    // the shell itself is only ever built once per setConfig(), so nothing
+    // here is entity-supplied data (icons/labels are our own fixed strings).
+    this.shadowRoot.innerHTML = `
+      <style>${this._styles()}</style>
+      <ha-card>
+        <div class="header">
+          <span class="title" id="title-text"></span>
+          <span class="pill" id="online-pill"></span>
+        </div>
+
+        <div class="hero">
+          ${svgBox()}
+          <img class="cover is-hidden" id="cover-img" alt="" />
+        </div>
+
+        <div class="tonie-info">
+          <div class="tonie-title" id="tonie-title"></div>
+          <div class="tonie-series is-hidden" id="tonie-series"></div>
+        </div>
+
+        <div class="status-row">
+          <div class="status-item is-hidden" id="last-connection-row">
+            <ha-icon icon="mdi:clock-outline"></ha-icon><span id="last-connection-text"></span>
+          </div>
+          <div class="status-item is-hidden" id="last-ip-row">
+            <ha-icon icon="mdi:ip-network"></ha-icon><span id="last-ip-text"></span>
+          </div>
+        </div>
+
+        ${controlsHtml}
+      </ha-card>
+    `;
+
+    this._wireControls();
+  }
+
+  _updateContent() {
+    const root = this.shadowRoot;
     const online = this._entity("entity_online");
     const lastConnection = this._entity("entity_last_connection");
     const lastIp = this._entity("entity_last_ip");
@@ -171,116 +269,100 @@ class TeddyCloudCard extends HTMLElement {
     const series = this._entity("entity_current_tonie_series");
 
     const isOnline = hasState(online) ? online.state === "on" : null;
-    const cover = hasState(tonie) ? tonie.attributes?.entity_picture : null;
     const title = this._config.title || online?.attributes?.friendly_name?.replace(/\s*Online\s*$/, "") || "TeddyCloud";
 
-    this.shadowRoot.innerHTML = `
-      <style>${this._styles()}</style>
-      <ha-card>
-        <div class="header">
-          <span class="title">${esc(title)}</span>
-          ${
-            isOnline === null
-              ? ""
-              : `<span class="pill ${isOnline ? "on" : "off"}">${isOnline ? "Online" : "Offline"}</span>`
-          }
-        </div>
+    root.getElementById("title-text").textContent = title;
 
-        <div class="hero">
-          ${svgBox()}
-          ${cover ? `<img class="cover" src="${esc(cover)}" alt="" />` : ""}
-        </div>
+    const pill = root.getElementById("online-pill");
+    pill.classList.toggle("is-hidden", isOnline === null);
+    if (isOnline !== null) {
+      pill.textContent = isOnline ? "Online" : "Offline";
+      pill.className = `pill ${isOnline ? "on" : "off"}`;
+    }
 
-        <div class="tonie-info">
-          <div class="tonie-title">${hasState(tonie) ? esc(tonie.state) : "No Tonie recorded yet"}</div>
-          ${hasState(series) ? `<div class="tonie-series">${esc(series.state)}</div>` : ""}
-        </div>
+    const cover = hasState(tonie) ? tonie.attributes?.entity_picture : null;
+    const coverImg = root.getElementById("cover-img");
+    coverImg.classList.toggle("is-hidden", !cover);
+    if (cover) {
+      coverImg.src = cover;
+    } else {
+      coverImg.removeAttribute("src");
+    }
 
-        <div class="status-row">
-          ${
-            hasState(lastConnection)
-              ? `<div class="status-item"><ha-icon icon="mdi:clock-outline"></ha-icon><span id="last-connection-text">${esc(fmtRelative(lastConnection.state) || lastConnection.state)}</span></div>`
-              : ""
-          }
-          ${
-            hasState(lastIp)
-              ? `<div class="status-item"><ha-icon icon="mdi:ip-network"></ha-icon><span>${esc(lastIp.state)}</span></div>`
-              : ""
-          }
-        </div>
+    root.getElementById("tonie-title").textContent = hasState(tonie) ? tonie.state : "No Tonie recorded yet";
 
-        ${this._config.show_controls ? this._renderControls() : ""}
-      </ha-card>
-    `;
+    const seriesEl = root.getElementById("tonie-series");
+    seriesEl.classList.toggle("is-hidden", !hasState(series));
+    if (hasState(series)) seriesEl.textContent = series.state;
 
-    this._wireControls();
+    const lastConnRow = root.getElementById("last-connection-row");
+    lastConnRow.classList.toggle("is-hidden", !hasState(lastConnection));
+    if (hasState(lastConnection)) {
+      root.getElementById("last-connection-text").textContent =
+        fmtRelative(lastConnection.state) || lastConnection.state;
+    }
+
+    const lastIpRow = root.getElementById("last-ip-row");
+    lastIpRow.classList.toggle("is-hidden", !hasState(lastIp));
+    if (hasState(lastIp)) root.getElementById("last-ip-text").textContent = lastIp.state;
+
+    if (this._config.show_controls) this._updateControls();
   }
 
-  _renderControls() {
-    const switches = [
-      ["entity_cloud_enabled", "Cloud Enabled", "mdi:cloud"],
-      ["entity_cache_content", "Cache Content", "mdi:cloud-download"],
-      ["entity_slap_enabled", "Slap To Skip", "mdi:gesture-tap"],
-      ["entity_slap_direction", "Slap Direction", "mdi:gesture-swipe"],
-    ];
-    const selects = [
-      ["entity_max_vol_speaker", "Max Volume Speaker"],
-      ["entity_max_vol_headphones", "Max Volume Headphones"],
-      ["entity_led_mode", "LED Mode"],
-    ];
-
-    const switchRows = switches
-      .map(([key, label, icon]) => {
-        const state = this._entity(key);
-        if (!state) return "";
-        const isOn = state.state === "on";
-        return `
-          <div class="control-row">
-            <ha-icon icon="${icon}"></ha-icon>
-            <span class="control-label">${label}</span>
-            <ha-switch data-key="${key}" data-entity="${esc(this._config[key])}" ${isOn ? "checked" : ""}></ha-switch>
-          </div>
-        `;
-      })
-      .join("");
-
-    const selectRows = selects
-      .map(([key, label]) => {
-        const state = this._entity(key);
-        if (!state) return "";
-        const options = state.attributes?.options || [];
-        return `
-          <div class="control-row">
-            <span class="control-label">${label}</span>
-            <select data-key="${key}" data-entity="${esc(this._config[key])}" class="option-select">
-              ${options.map((opt) => `<option value="${esc(opt)}" ${opt === state.state ? "selected" : ""}>${esc(opt)}</option>`).join("")}
-            </select>
-          </div>
-        `;
-      })
-      .join("");
-
-    if (!switchRows && !selectRows) return "";
-    return `<div class="controls">${switchRows}${selectRows}</div>`;
+  _updateControls() {
+    const root = this.shadowRoot;
+    for (const [key] of this._switchFields) {
+      const state = this._entity(key);
+      const row = root.querySelector(`[data-row="${key}"]`);
+      row.classList.toggle("is-hidden", !state);
+      if (!state) continue;
+      const el = root.getElementById(`ctrl-${key}`);
+      el.checked = state.state === "on";
+      el.dataset.entity = this._config[key];
+    }
+    for (const [key] of this._selectFields) {
+      const state = this._entity(key);
+      const row = root.querySelector(`[data-row="${key}"]`);
+      row.classList.toggle("is-hidden", !state);
+      if (!state) continue;
+      const el = root.getElementById(`ctrl-${key}`);
+      const options = state.attributes?.options || [];
+      const current = Array.from(el.options).map((o) => o.value);
+      if (current.join("") !== options.join("")) {
+        el.textContent = "";
+        for (const opt of options) {
+          const optionEl = document.createElement("option");
+          optionEl.value = opt;
+          optionEl.textContent = opt;
+          el.appendChild(optionEl);
+        }
+      }
+      el.value = state.state;
+      el.dataset.entity = this._config[key];
+    }
   }
 
   _wireControls() {
-    this.shadowRoot.querySelectorAll("ha-switch[data-entity]").forEach((el) => {
-      el.addEventListener("change", () => {
-        const entityId = el.getAttribute("data-entity");
+    const root = this.shadowRoot;
+    for (const [key] of this._switchFields) {
+      root.getElementById(`ctrl-${key}`).addEventListener("change", (ev) => {
+        const entityId = ev.target.dataset.entity;
         const state = this._hass.states[entityId];
         this._toggleSwitch(entityId, state?.state === "on");
       });
-    });
-    this.shadowRoot.querySelectorAll("select.option-select[data-entity]").forEach((el) => {
-      el.addEventListener("change", () => {
-        this._selectOption(el.getAttribute("data-entity"), el.value);
+    }
+    for (const [key] of this._selectFields) {
+      root.getElementById(`ctrl-${key}`).addEventListener("change", (ev) => {
+        this._selectOption(ev.target.dataset.entity, ev.target.value);
       });
-    });
+    }
   }
 
   _styles() {
     return `
+      .is-hidden {
+        display: none !important;
+      }
       ha-card {
         padding: 16px;
         display: flex;
