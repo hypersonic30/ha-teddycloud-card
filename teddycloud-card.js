@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.6.0";
+const CARD_VERSION = "0.6.1";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -634,20 +634,14 @@ class TeddyCloudCard extends HTMLElement {
 
       audio.classList.remove("is-hidden");
 
-      // Mirrors teddyCloud's own web player: an explicit type="audio/ogg"
-      // on a <source> child, not just audio.src directly — teddyCloud's
-      // /content/download response apparently doesn't carry a Content-Type
-      // Safari is willing to guess a decoder from on its own.
-      let source = audio.querySelector("source");
-      if (!source) {
-        source = document.createElement("source");
-        source.type = "audio/ogg";
-        audio.appendChild(source);
-      }
-      if (source.src !== audioUrl) {
-        source.src = audioUrl;
-        audio.load();
-      }
+      // Plain audio.src, not a <source type="audio/ogg"> child: the
+      // integration's own stream proxy (v0.5.0+) always sends a correct
+      // Content-Type itself now, so the client-side type hint that used to
+      // compensate for teddyCloud's generic header is no longer needed —
+      // and it turned out to interfere with AirPlay's position handoff
+      // when switching targets mid-playback (always restarted at 0
+      // instead of resuming where the previous target was).
+      if (audio.src !== audioUrl) audio.src = audioUrl;
       audio.play();
     });
 
