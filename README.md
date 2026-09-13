@@ -89,10 +89,11 @@ resources:
 
 ## Assigning a Tonie via NFC dump
 
-With `show_nfc_assign: true`, the card shows a small file picker and an "Assign" button. Pick a
-`.nfc` dump (Flipper Zero format) of a Tonie figure and click Assign: the card uploads it through
-Home Assistant's own file upload API and calls the integration's `teddycloud.assign_nfc_tag`
-service, targeting whichever box device your configured entities belong to.
+With `show_nfc_assign: true`, the card shows a small file picker and an "Assign" button. Pick one
+or several `.nfc` dumps (Flipper Zero format) of Tonie figures and click Assign: the card uploads
+each through Home Assistant's own file upload API and calls the integration's
+`teddycloud.assign_nfc_tag` service once per file, targeting whichever box device your configured
+entities belong to.
 
 This requires:
 1. A [teddycloud-nfc-bridge](https://github.com/hypersonic30/teddycloud-nfc-bridge) instance

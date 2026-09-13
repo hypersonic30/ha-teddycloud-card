@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.3.0";
+const CARD_VERSION = "0.4.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -231,7 +231,7 @@ class TeddyCloudCard extends HTMLElement {
       ? `
           <div class="nfc-assign">
             <div class="nfc-assign-row">
-              <input type="file" id="nfc-file" accept=".nfc" />
+              <input type="file" id="nfc-file" accept=".nfc" multiple />
               <button id="nfc-submit" type="button">Assign</button>
             </div>
             <div class="nfc-result is-hidden" id="nfc-result"></div>
@@ -423,8 +423,8 @@ class TeddyCloudCard extends HTMLElement {
     const result = root.getElementById("nfc-result");
 
     button.addEventListener("click", async () => {
-      const file = fileInput.files[0];
-      if (!file) return;
+      const files = Array.from(fileInput.files);
+      if (!files.length) return;
 
       const deviceId = this._resolveDeviceId();
       if (!deviceId) {
@@ -436,31 +436,57 @@ class TeddyCloudCard extends HTMLElement {
         return;
       }
 
+      // The bridge/service handle one .nfc file per call, so a multi-file
+      // selection is just this loop client-side — sequential, so the
+      // progress text and per-file errors stay meaningful.
       button.disabled = true;
-      this._showNfcResult(result, "", "Uploading…");
-      try {
-        const formData = new FormData();
-        formData.append("file", file);
-        const uploadResp = await this._hass.fetchWithAuth("/api/file_upload", {
-          method: "POST",
-          body: formData,
-        });
-        if (!uploadResp.ok) throw new Error(`Upload failed (HTTP ${uploadResp.status})`);
-        const { file_id } = await uploadResp.json();
-
-        await this._hass.callService(
-          "teddycloud",
-          "assign_nfc_tag",
-          { file: file_id },
-          { device_id: [deviceId] }
+      let assigned = 0;
+      const failures = [];
+      for (const [index, file] of files.entries()) {
+        this._showNfcResult(
+          result,
+          "",
+          files.length > 1 ? `Uploading ${index + 1}/${files.length}: ${file.name}…` : "Uploading…"
         );
-        this._showNfcResult(result, "ok", "Tonie assigned — refreshing shortly.");
-        fileInput.value = "";
-      } catch (err) {
-        this._showNfcResult(result, "err", err?.message || String(err));
-      } finally {
-        button.disabled = false;
+        try {
+          const formData = new FormData();
+          formData.append("file", file);
+          const uploadResp = await this._hass.fetchWithAuth("/api/file_upload", {
+            method: "POST",
+            body: formData,
+          });
+          if (!uploadResp.ok) throw new Error(`Upload failed (HTTP ${uploadResp.status})`);
+          const { file_id } = await uploadResp.json();
+
+          await this._hass.callService(
+            "teddycloud",
+            "assign_nfc_tag",
+            { file: file_id },
+            { device_id: [deviceId] }
+          );
+          assigned++;
+        } catch (err) {
+          failures.push(`${file.name}: ${err?.message || String(err)}`);
+        }
       }
+
+      if (!failures.length) {
+        this._showNfcResult(
+          result,
+          "ok",
+          assigned === 1
+            ? "Tonie assigned — refreshing shortly."
+            : `${assigned} Tonies assigned — refreshing shortly.`
+        );
+        fileInput.value = "";
+      } else {
+        this._showNfcResult(
+          result,
+          "err",
+          `${assigned}/${files.length} assigned. Failed: ${failures.join("; ")}`
+        );
+      }
+      button.disabled = false;
     });
   }
 
