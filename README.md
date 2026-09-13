@@ -70,6 +70,7 @@ resources:
 | `title` | Card header title. Defaults to the online sensor's device name, else "TeddyCloud". |
 | `show_controls` | Show the switches/selects section. Default `true`. |
 | `show_nfc_assign` | Show an "Assign Tonie" file upload + button (see below). Default `false`. |
+| `show_tonie_library` | Show the Tonie Library player (see below). Default `false`. |
 | `entity_*` | See the table below — every one is optional. |
 
 | Option | Expected domain | What it drives |
@@ -86,6 +87,20 @@ resources:
 | `entity_max_vol_speaker` | `select` | Speaker volume limit dropdown |
 | `entity_max_vol_headphones` | `select` | Headphone volume limit dropdown |
 | `entity_led_mode` | `select` | LED mode dropdown |
+| `entity_tonie_library` | `sensor` | Tonie Library player (see below) |
+
+## Playing cached Tonies (Tonie Library)
+
+With `show_tonie_library: true`, the card shows a row of cover-art thumbnails for every Tonie
+teddyCloud has already cached for this box, and a standard `<audio>` bar below it (play/pause,
+seek, volume). Pick a Tonie and it streams straight from teddyCloud's own server — the same
+header-stripped stream its own web player uses — into whatever browser has this dashboard open.
+
+There's no "casting" involved: this isn't a Home Assistant `media_player`, since there's no real
+device for HA to send a play command to (the Toniebox itself can't be remote-controlled to play).
+It's local playback, the same way a camera preview plays in whichever browser is looking at it.
+
+This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.4.0+.
 
 ## Assigning a Tonie via NFC dump
 

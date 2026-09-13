@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.4.0";
+const CARD_VERSION = "0.5.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -37,6 +37,7 @@ const ENTITY_FIELDS = [
   { key: "entity_max_vol_speaker", label: "Max Volume Speaker (select)", domain: "select" },
   { key: "entity_max_vol_headphones", label: "Max Volume Headphones (select)", domain: "select" },
   { key: "entity_led_mode", label: "LED Mode (select)", domain: "select" },
+  { key: "entity_tonie_library", label: "Tonie Library (sensor)", domain: "sensor" },
 ];
 
 const SWITCH_FIELDS = [
@@ -108,7 +109,12 @@ class TeddyCloudCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
-    this._config = { show_controls: true, show_nfc_assign: false, ...config };
+    this._config = {
+      show_controls: true,
+      show_nfc_assign: false,
+      show_tonie_library: false,
+      ...config,
+    };
     this._configEntityIds = ENTITY_FIELDS.map(({ key }) => config[key]).filter(Boolean);
     // Which controls exist depends only on config, so only a config change
     // (not a routine hass update) needs to rebuild the DOM shell.
@@ -239,6 +245,22 @@ class TeddyCloudCard extends HTMLElement {
         `
       : "";
 
+    // Cover art + titles come straight from teddyCloud's own tag database —
+    // built via DOM APIs below (never innerHTML) for the same reason as the
+    // rest of this file: entity-supplied strings must never pass through
+    // innerHTML. Audio plays directly from teddyCloud's own stream URL
+    // (already absolute, ?skip_header=true) via a plain <audio controls>,
+    // right in whatever browser has this dashboard open — there's no HA
+    // "device" to cast to here.
+    const tonieLibraryHtml = this._config.show_tonie_library
+      ? `
+          <div class="tonie-library">
+            <div class="library-grid" id="library-grid"></div>
+            <audio id="library-audio" class="is-hidden" controls></audio>
+          </div>
+        `
+      : "";
+
     // Every row that can appear/disappear at runtime (not just at config
     // time) is always present in the shell and toggled via .is-hidden —
     // the shell itself is only ever built once per setConfig(), so nothing
@@ -273,11 +295,13 @@ class TeddyCloudCard extends HTMLElement {
 
         ${controlsHtml}
         ${nfcAssignHtml}
+        ${tonieLibraryHtml}
       </ha-card>
     `;
 
     this._wireControls();
     this._wireNfcAssign();
+    this._wireTonieLibrary();
   }
 
   _updateContent() {
@@ -343,6 +367,57 @@ class TeddyCloudCard extends HTMLElement {
     if (hasState(lastIp)) root.getElementById("last-ip-text").textContent = lastIp.state;
 
     if (this._config.show_controls) this._updateControls();
+    if (this._config.show_tonie_library) this._updateTonieLibrary();
+  }
+
+  _updateTonieLibrary() {
+    const root = this.shadowRoot;
+    const library = this._entity("entity_tonie_library");
+    const tonies = hasState(library) ? library.attributes?.tonies || [] : [];
+
+    // Cheap to compute, and skips rebuilding the grid (losing the current
+    // "is-playing" highlight) on every poll when the library hasn't
+    // actually changed — same idea as the select-options diff above.
+    const signature = tonies.map((tonie) => tonie.ruid).join(",");
+    if (this._libraryGridSignature === signature) return;
+    this._libraryGridSignature = signature;
+
+    const grid = root.getElementById("library-grid");
+    grid.textContent = "";
+
+    if (!tonies.length) {
+      const empty = document.createElement("div");
+      empty.className = "library-empty";
+      empty.textContent = "No Tonies cached yet.";
+      grid.appendChild(empty);
+      return;
+    }
+
+    for (const tonie of tonies) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "library-item";
+      item.title = tonie.title || tonie.ruid || "";
+      item.dataset.audioUrl = tonie.audio_url || "";
+
+      if (tonie.picture) {
+        const img = document.createElement("img");
+        img.src = tonie.picture;
+        img.alt = "";
+        img.loading = "lazy";
+        item.appendChild(img);
+      } else {
+        const icon = document.createElement("ha-icon");
+        icon.setAttribute("icon", "mdi:teddy-bear");
+        item.appendChild(icon);
+      }
+
+      const label = document.createElement("span");
+      label.textContent = tonie.title || tonie.ruid || "";
+      item.appendChild(label);
+
+      grid.appendChild(item);
+    }
   }
 
   _updateControls() {
@@ -487,6 +562,28 @@ class TeddyCloudCard extends HTMLElement {
         );
       }
       button.disabled = false;
+    });
+  }
+
+  _wireTonieLibrary() {
+    if (!this._config.show_tonie_library) return;
+    const root = this.shadowRoot;
+    const grid = root.getElementById("library-grid");
+    const audio = root.getElementById("library-audio");
+
+    grid.addEventListener("click", (ev) => {
+      const item = ev.target.closest(".library-item");
+      const audioUrl = item?.dataset.audioUrl;
+      if (!audioUrl) return;
+
+      grid.querySelectorAll(".library-item.is-playing").forEach((el) => {
+        el.classList.remove("is-playing");
+      });
+      item.classList.add("is-playing");
+
+      audio.classList.remove("is-hidden");
+      if (audio.src !== audioUrl) audio.src = audioUrl;
+      audio.play();
     });
   }
 
@@ -652,13 +749,80 @@ class TeddyCloudCard extends HTMLElement {
       .nfc-result.err {
         color: var(--error-color, #db4437);
       }
+      .tonie-library {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px solid var(--divider-color);
+        padding-top: 12px;
+      }
+      .library-grid {
+        display: flex;
+        gap: 10px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+      }
+      .library-empty {
+        font-size: 0.85rem;
+        color: var(--secondary-text-color);
+      }
+      .library-item {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        width: 64px;
+        flex: 0 0 auto;
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        color: var(--secondary-text-color);
+      }
+      .library-item img,
+      .library-item ha-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 8px;
+        object-fit: cover;
+        background: var(--secondary-background-color);
+      }
+      .library-item ha-icon {
+        --mdc-icon-size: 28px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .library-item span {
+        font-size: 0.7rem;
+        max-width: 64px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .library-item.is-playing {
+        color: var(--primary-color);
+      }
+      .library-item.is-playing img,
+      .library-item.is-playing ha-icon {
+        outline: 2px solid var(--primary-color);
+      }
+      #library-audio {
+        width: 100%;
+        height: 32px;
+      }
     `;
   }
 }
 
 class TeddyCloudCardEditor extends HTMLElement {
   setConfig(config) {
-    this._config = { show_controls: true, show_nfc_assign: false, ...config };
+    this._config = {
+      show_controls: true,
+      show_nfc_assign: false,
+      show_tonie_library: false,
+      ...config,
+    };
     this._render();
   }
 
@@ -700,6 +864,11 @@ class TeddyCloudCardEditor extends HTMLElement {
           <ha-switch id="show_nfc_assign" ${this._config.show_nfc_assign ? "checked" : ""}></ha-switch>
         </ha-formfield>
       </div>
+      <div class="row">
+        <ha-formfield label="Show Tonie Library player">
+          <ha-switch id="show_tonie_library" ${this._config.show_tonie_library ? "checked" : ""}></ha-switch>
+        </ha-formfield>
+      </div>
       ${ENTITY_FIELDS.map(({ key }) => `<div class="row" data-field="${key}"></div>`).join("")}
     `;
 
@@ -719,6 +888,12 @@ class TeddyCloudCardEditor extends HTMLElement {
     const showNfcAssign = this.shadowRoot.getElementById("show_nfc_assign");
     showNfcAssign.addEventListener("change", (ev) => {
       this._config = { ...this._config, show_nfc_assign: ev.target.checked };
+      this._emitChange();
+    });
+
+    const showTonieLibrary = this.shadowRoot.getElementById("show_tonie_library");
+    showTonieLibrary.addEventListener("change", (ev) => {
+      this._config = { ...this._config, show_tonie_library: ev.target.checked };
       this._emitChange();
     });
 
