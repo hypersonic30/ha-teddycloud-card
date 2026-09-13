@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.5.2";
+const CARD_VERSION = "0.5.3";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -596,12 +596,28 @@ class TeddyCloudCard extends HTMLElement {
       item.classList.add("is-playing");
 
       audio.classList.remove("is-hidden");
-      if (audio.src !== audioUrl) audio.src = audioUrl;
+
+      // Mirrors teddyCloud's own web player: an explicit type="audio/ogg"
+      // on a <source> child, not just audio.src directly — teddyCloud's
+      // /content/download response apparently doesn't carry a Content-Type
+      // Safari is willing to guess a decoder from on its own.
+      let source = audio.querySelector("source");
+      if (!source) {
+        source = document.createElement("source");
+        source.type = "audio/ogg";
+        audio.appendChild(source);
+      }
+      if (source.src !== audioUrl) {
+        source.src = audioUrl;
+        audio.load();
+      }
       audio.play();
     });
 
     audio.addEventListener("error", () => {
-      showMessage("Playback failed — could not play this Tonie's audio.");
+      const err = audio.error;
+      const detail = err ? ` (code ${err.code}${err.message ? `: ${err.message}` : ""})` : "";
+      showMessage(`Playback failed — could not play this Tonie's audio${detail}.`);
     });
     audio.addEventListener("playing", () => message.classList.add("is-hidden"));
   }
