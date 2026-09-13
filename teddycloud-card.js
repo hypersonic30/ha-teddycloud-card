@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.6.1";
+const CARD_VERSION = "0.6.2";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -637,10 +637,7 @@ class TeddyCloudCard extends HTMLElement {
       // Plain audio.src, not a <source type="audio/ogg"> child: the
       // integration's own stream proxy (v0.5.0+) always sends a correct
       // Content-Type itself now, so the client-side type hint that used to
-      // compensate for teddyCloud's generic header is no longer needed —
-      // and it turned out to interfere with AirPlay's position handoff
-      // when switching targets mid-playback (always restarted at 0
-      // instead of resuming where the previous target was).
+      // compensate for teddyCloud's generic header is no longer needed.
       if (audio.src !== audioUrl) audio.src = audioUrl;
       audio.play();
     });
@@ -650,6 +647,29 @@ class TeddyCloudCard extends HTMLElement {
       const detail = err ? ` (code ${err.code}${err.message ? `: ${err.message}` : ""})` : "";
       showMessage(`Playback failed — could not play this Tonie's audio${detail}.`);
     });
+
+    // Track the last known-good position ourselves: switching the AirPlay
+    // target to a device that has to fetch/decode the stream itself (see
+    // the integration's stream_view docstring) always restarts it at 0 —
+    // Safari doesn't appear to hand the current position to the new
+    // target on connect, and never reports the new target's own position
+    // back to the page either. webkitcurrentplaybacktargetiswirelesschanged
+    // is the (Safari-only) signal that a route switch just happened; a
+    // short delay gives the new target's own playback time to actually
+    // start before we force it back to where we were.
+    audio.addEventListener("timeupdate", () => {
+      this._lastAudioPosition = audio.currentTime;
+    });
+    if ("webkitCurrentPlaybackTargetIsWireless" in audio) {
+      audio.addEventListener("webkitcurrentplaybacktargetiswirelesschanged", () => {
+        const position = this._lastAudioPosition || 0;
+        setTimeout(() => {
+          if (Math.abs(audio.currentTime - position) > 1) {
+            audio.currentTime = position;
+          }
+        }, 500);
+      });
+    }
     audio.addEventListener("playing", () => message.classList.add("is-hidden"));
   }
 
