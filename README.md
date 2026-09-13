@@ -102,6 +102,13 @@ It's local playback, the same way a camera preview plays in whichever browser is
 
 This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.4.0+.
 
+> [!NOTE]
+> **Safari/iOS (incl. the Home Assistant iOS app) can't play this.** teddyCloud streams
+> Ogg/Opus audio, a format Safari/WebKit has never supported, and teddyCloud has no server-side
+> transcoding option to fall back to — its own web UI has the exact same limitation. The card
+> detects this and shows a message instead of a confusing native player error. Chrome, Firefox,
+> and the Android app all play it fine.
+
 ## Assigning a Tonie via NFC dump
 
 With `show_nfc_assign: true`, the card shows a small file picker and an "Assign" button. Pick one
