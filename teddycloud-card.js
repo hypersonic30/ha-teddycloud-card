@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.6.2";
+const CARD_VERSION = "0.6.3";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -654,20 +654,33 @@ class TeddyCloudCard extends HTMLElement {
     // Safari doesn't appear to hand the current position to the new
     // target on connect, and never reports the new target's own position
     // back to the page either. webkitcurrentplaybacktargetiswirelesschanged
-    // is the (Safari-only) signal that a route switch just happened; a
-    // short delay gives the new target's own playback time to actually
-    // start before we force it back to where we were.
+    // is the (Safari-only) signal that a route switch just happened.
     audio.addEventListener("timeupdate", () => {
       this._lastAudioPosition = audio.currentTime;
     });
     if ("webkitCurrentPlaybackTargetIsWireless" in audio) {
       audio.addEventListener("webkitcurrentplaybacktargetiswirelesschanged", () => {
         const position = this._lastAudioPosition || 0;
+        // Poking .currentTime alone on the already-connected session did
+        // nothing (v0.6.2) — there's likely no live channel back to a
+        // target that's already fetching/decoding on its own. Forcing a
+        // full source reload with currentTime set *before* play() at
+        // least gives the new fetch a chance to start at the right byte
+        // range from the outset, instead of correcting one already in
+        // flight from 0.
         setTimeout(() => {
-          if (Math.abs(audio.currentTime - position) > 1) {
+          const src = audio.src;
+          const onLoadedMetadata = () => {
+            audio.removeEventListener("loadedmetadata", onLoadedMetadata);
             audio.currentTime = position;
-          }
-        }, 500);
+            audio.play();
+          };
+          audio.addEventListener("loadedmetadata", onLoadedMetadata);
+          audio.src = "";
+          audio.load();
+          audio.src = src;
+          audio.load();
+        }, 300);
       });
     }
     audio.addEventListener("playing", () => message.classList.add("is-hidden"));
