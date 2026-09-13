@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.2.0";
+const CARD_VERSION = "0.3.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -108,7 +108,7 @@ class TeddyCloudCard extends HTMLElement {
 
   setConfig(config) {
     if (!config) throw new Error("Invalid configuration");
-    this._config = { show_controls: true, ...config };
+    this._config = { show_controls: true, show_nfc_assign: false, ...config };
     this._configEntityIds = ENTITY_FIELDS.map(({ key }) => config[key]).filter(Boolean);
     // Which controls exist depends only on config, so only a config change
     // (not a routine hass update) needs to rebuild the DOM shell.
@@ -223,6 +223,22 @@ class TeddyCloudCard extends HTMLElement {
         ? `<div class="controls">${switchRows}${selectRows}</div>`
         : "";
 
+    // Uploads a .nfc dump via HA's file_upload API and calls the
+    // teddycloud.assign_nfc_tag service (device-targeted) — requires the
+    // teddycloud-nfc-bridge sidecar to be configured on the integration
+    // side; errors from a missing sidecar surface in .nfc-result as-is.
+    const nfcAssignHtml = this._config.show_nfc_assign
+      ? `
+          <div class="nfc-assign">
+            <div class="nfc-assign-row">
+              <input type="file" id="nfc-file" accept=".nfc" />
+              <button id="nfc-submit" type="button">Assign</button>
+            </div>
+            <div class="nfc-result is-hidden" id="nfc-result"></div>
+          </div>
+        `
+      : "";
+
     // Every row that can appear/disappear at runtime (not just at config
     // time) is always present in the shell and toggled via .is-hidden —
     // the shell itself is only ever built once per setConfig(), so nothing
@@ -256,10 +272,12 @@ class TeddyCloudCard extends HTMLElement {
         </div>
 
         ${controlsHtml}
+        ${nfcAssignHtml}
       </ha-card>
     `;
 
     this._wireControls();
+    this._wireNfcAssign();
   }
 
   _updateContent() {
@@ -374,6 +392,76 @@ class TeddyCloudCard extends HTMLElement {
         this._selectOption(ev.target.dataset.entity, ev.target.value);
       });
     }
+  }
+
+  // Any one of the configured entities resolves to the same HA device, so
+  // the first configured field that the entity registry recognizes wins —
+  // there's no separate "device" config option to keep in sync.
+  _resolveDeviceId() {
+    const hass = this._hass;
+    if (!hass?.entities) return null;
+    for (const { key } of ENTITY_FIELDS) {
+      const entityId = this._config[key];
+      if (!entityId) continue;
+      const deviceId = hass.entities[entityId]?.device_id;
+      if (deviceId) return deviceId;
+    }
+    return null;
+  }
+
+  _showNfcResult(el, kind, text) {
+    el.classList.remove("is-hidden");
+    el.className = `nfc-result ${kind}`.trim();
+    el.textContent = text;
+  }
+
+  _wireNfcAssign() {
+    if (!this._config.show_nfc_assign) return;
+    const root = this.shadowRoot;
+    const button = root.getElementById("nfc-submit");
+    const fileInput = root.getElementById("nfc-file");
+    const result = root.getElementById("nfc-result");
+
+    button.addEventListener("click", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+
+      const deviceId = this._resolveDeviceId();
+      if (!deviceId) {
+        this._showNfcResult(
+          result,
+          "err",
+          "Could not determine the box device — configure at least one entity above."
+        );
+        return;
+      }
+
+      button.disabled = true;
+      this._showNfcResult(result, "", "Uploading…");
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const uploadResp = await this._hass.fetchWithAuth("/api/file_upload", {
+          method: "POST",
+          body: formData,
+        });
+        if (!uploadResp.ok) throw new Error(`Upload failed (HTTP ${uploadResp.status})`);
+        const { file_id } = await uploadResp.json();
+
+        await this._hass.callService(
+          "teddycloud",
+          "assign_nfc_tag",
+          { file: file_id },
+          { device_id: [deviceId] }
+        );
+        this._showNfcResult(result, "ok", "Tonie assigned — refreshing shortly.");
+        fileInput.value = "";
+      } catch (err) {
+        this._showNfcResult(result, "err", err?.message || String(err));
+      } finally {
+        button.disabled = false;
+      }
+    });
   }
 
   _styles() {
@@ -498,13 +586,53 @@ class TeddyCloudCard extends HTMLElement {
         border-radius: 6px;
         padding: 4px 8px;
       }
+      .nfc-assign {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px solid var(--divider-color);
+        padding-top: 12px;
+      }
+      .nfc-assign-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .nfc-assign-row input[type="file"] {
+        flex: 1;
+        min-width: 0;
+        font-size: 0.85rem;
+        color: var(--primary-text-color);
+      }
+      .nfc-assign-row button {
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
+        border: none;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+      .nfc-assign-row button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      .nfc-result {
+        font-size: 0.85rem;
+      }
+      .nfc-result.ok {
+        color: #4caf50;
+      }
+      .nfc-result.err {
+        color: var(--error-color, #db4437);
+      }
     `;
   }
 }
 
 class TeddyCloudCardEditor extends HTMLElement {
   setConfig(config) {
-    this._config = { show_controls: true, ...config };
+    this._config = { show_controls: true, show_nfc_assign: false, ...config };
     this._render();
   }
 
@@ -541,6 +669,11 @@ class TeddyCloudCardEditor extends HTMLElement {
           <ha-switch id="show_controls" ${this._config.show_controls ? "checked" : ""}></ha-switch>
         </ha-formfield>
       </div>
+      <div class="row">
+        <ha-formfield label="Show 'Assign Tonie' button">
+          <ha-switch id="show_nfc_assign" ${this._config.show_nfc_assign ? "checked" : ""}></ha-switch>
+        </ha-formfield>
+      </div>
       ${ENTITY_FIELDS.map(({ key }) => `<div class="row" data-field="${key}"></div>`).join("")}
     `;
 
@@ -554,6 +687,12 @@ class TeddyCloudCardEditor extends HTMLElement {
     const showControls = this.shadowRoot.getElementById("show_controls");
     showControls.addEventListener("change", (ev) => {
       this._config = { ...this._config, show_controls: ev.target.checked };
+      this._emitChange();
+    });
+
+    const showNfcAssign = this.shadowRoot.getElementById("show_nfc_assign");
+    showNfcAssign.addEventListener("change", (ev) => {
+      this._config = { ...this._config, show_nfc_assign: ev.target.checked };
       this._emitChange();
     });
 

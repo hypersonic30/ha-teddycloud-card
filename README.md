@@ -12,6 +12,10 @@ you switches/selects for teddyCloud's box settings.
 > This project consists of **two components** — both are required:
 > - **[TeddyCloud Integration](https://github.com/hypersonic30/ha-teddycloud-integration)** — creates the entities (install first)
 > - **TeddyCloud Card** (this repo) — the Lovelace frontend card
+>
+> Optionally, a third, standalone component —
+> **[teddycloud-nfc-bridge](https://github.com/hypersonic30/teddycloud-nfc-bridge)** — enables the
+> "Assign Tonie" button described below.
 
 ## Quick setup
 
@@ -65,6 +69,7 @@ resources:
 |---|---|
 | `title` | Card header title. Defaults to the online sensor's device name, else "TeddyCloud". |
 | `show_controls` | Show the switches/selects section. Default `true`. |
+| `show_nfc_assign` | Show an "Assign Tonie" file upload + button (see below). Default `false`. |
 | `entity_*` | See the table below — every one is optional. |
 
 | Option | Expected domain | What it drives |
@@ -81,6 +86,21 @@ resources:
 | `entity_max_vol_speaker` | `select` | Speaker volume limit dropdown |
 | `entity_max_vol_headphones` | `select` | Headphone volume limit dropdown |
 | `entity_led_mode` | `select` | LED mode dropdown |
+
+## Assigning a Tonie via NFC dump
+
+With `show_nfc_assign: true`, the card shows a small file picker and an "Assign" button. Pick a
+`.nfc` dump (Flipper Zero format) of a Tonie figure and click Assign: the card uploads it through
+Home Assistant's own file upload API and calls the integration's `teddycloud.assign_nfc_tag`
+service, targeting whichever box device your configured entities belong to.
+
+This requires:
+1. A [teddycloud-nfc-bridge](https://github.com/hypersonic30/teddycloud-nfc-bridge) instance
+   running with access to your teddyCloud server's content volume.
+2. Its URL configured on the TeddyCloud integration's config entry (reconfigure flow).
+
+Without both, the button still appears but the service call fails with an error shown inline —
+nothing in the card itself needs the sidecar to render.
 
 ## Design notes
 
