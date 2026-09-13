@@ -108,6 +108,12 @@ It's local playback, the same way a camera preview plays in whichever browser is
 
 This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.4.0+.
 
+AirPlay (the icon in Safari's native audio controls) works too for a receiver on the same
+network as teddyCloud — e.g. a HomePod or another Mac at home. It won't work for a receiver on a
+different network (say, a TV at a hotel while you're away on VPN) since that device has to fetch
+the stream itself directly, and it simply has no route to your home network — no fix for that
+without exposing Home Assistant externally.
+
 ## Assigning a Tonie via NFC dump
 
 With `show_nfc_assign: true`, the card shows a small file picker and an "Assign" button. Pick one
