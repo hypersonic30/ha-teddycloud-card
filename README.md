@@ -36,6 +36,10 @@ you switches/selects for teddyCloud's box settings.
    entity_max_vol_speaker: select.teddycloud_box_4827e2f62714_max_volume_speaker
    entity_max_vol_headphones: select.teddycloud_box_4827e2f62714_max_volume_headphones
    entity_led_mode: select.teddycloud_box_4827e2f62714_led_mode
+   # Optional — see "Playing cached Tonies" and "Assigning a Tonie via NFC dump" below
+   show_tonie_library: true
+   entity_tonie_library: sensor.teddycloud_box_4827e2f62714_tonie_library
+   show_nfc_assign: true
    ```
 
 The visual card editor (pencil icon) has an entity picker for every field above — you don't
