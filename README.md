@@ -91,10 +91,12 @@ resources:
 
 ## Playing cached Tonies (Tonie Library)
 
-With `show_tonie_library: true`, the card shows a row of cover-art thumbnails for every Tonie
-teddyCloud has already cached for this box, and a standard `<audio>` bar below it (play/pause,
-seek, volume). Pick a Tonie and it streams straight from teddyCloud's own server — the same
-header-stripped stream its own web player uses — into whatever browser has this dashboard open.
+With `show_tonie_library: true`, the card shows a search box and a wrapping grid of cover-art
+thumbnails for every Tonie teddyCloud has already cached for this box, and a standard `<audio>`
+bar below it (play/pause, seek, volume). Type in the search box to filter the grid down by title
+or series — handy once you have more Tonies than fit on screen at once. Pick a Tonie and it
+streams straight from teddyCloud's own server — the same header-stripped stream its own web
+player uses — into whatever browser has this dashboard open.
 
 There's no "casting" involved: this isn't a Home Assistant `media_player`, since there's no real
 device for HA to send a play command to (the Toniebox itself can't be remote-controlled to play).

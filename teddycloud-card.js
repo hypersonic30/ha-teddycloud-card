@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.5.3";
+const CARD_VERSION = "0.6.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -255,6 +255,7 @@ class TeddyCloudCard extends HTMLElement {
     const tonieLibraryHtml = this._config.show_tonie_library
       ? `
           <div class="tonie-library">
+            <input type="search" id="library-search" class="library-search" placeholder="Search Tonies…" />
             <div class="library-grid" id="library-grid"></div>
             <audio id="library-audio" class="is-hidden" controls></audio>
             <div class="library-message is-hidden" id="library-message"></div>
@@ -400,6 +401,7 @@ class TeddyCloudCard extends HTMLElement {
       item.className = "library-item";
       item.title = tonie.title || tonie.ruid || "";
       item.dataset.audioUrl = tonie.audio_url || "";
+      item.dataset.search = `${tonie.title || ""} ${tonie.series || ""}`.toLowerCase();
 
       if (tonie.picture) {
         const img = document.createElement("img");
@@ -418,6 +420,38 @@ class TeddyCloudCard extends HTMLElement {
       item.appendChild(label);
 
       grid.appendChild(item);
+    }
+
+    // A poll can rebuild the grid out from under an in-progress search
+    // (new/removed Tonie changes the signature) — keep whatever the user
+    // already typed applied to the fresh set of items.
+    this._applyLibrarySearch();
+  }
+
+  _applyLibrarySearch() {
+    const root = this.shadowRoot;
+    const searchInput = root.getElementById("library-search");
+    const grid = root.getElementById("library-grid");
+    const query = (searchInput?.value || "").trim().toLowerCase();
+
+    const items = grid.querySelectorAll(".library-item");
+    let visibleCount = 0;
+    items.forEach((item) => {
+      const matches = !query || item.dataset.search.includes(query);
+      item.classList.toggle("is-hidden", !matches);
+      if (matches) visibleCount++;
+    });
+
+    let noMatches = grid.querySelector(".library-no-matches");
+    if (query && visibleCount === 0 && items.length) {
+      if (!noMatches) {
+        noMatches = document.createElement("div");
+        noMatches.className = "library-empty library-no-matches";
+        grid.appendChild(noMatches);
+      }
+      noMatches.textContent = `No Tonies match "${searchInput.value.trim()}".`;
+    } else if (noMatches) {
+      noMatches.remove();
     }
   }
 
@@ -572,6 +606,9 @@ class TeddyCloudCard extends HTMLElement {
     const grid = root.getElementById("library-grid");
     const audio = root.getElementById("library-audio");
     const message = root.getElementById("library-message");
+    const searchInput = root.getElementById("library-search");
+
+    searchInput.addEventListener("input", () => this._applyLibrarySearch());
 
     const showMessage = (text) => {
       message.textContent = text;
@@ -791,10 +828,22 @@ class TeddyCloudCard extends HTMLElement {
         border-top: 1px solid var(--divider-color);
         padding-top: 12px;
       }
+      .library-search {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 10px;
+        font-size: 0.85rem;
+        background: var(--card-background-color);
+        color: var(--primary-text-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+      }
       .library-grid {
         display: flex;
+        flex-wrap: wrap;
         gap: 10px;
-        overflow-x: auto;
+        max-height: 190px;
+        overflow-y: auto;
         padding-bottom: 4px;
       }
       .library-empty {
