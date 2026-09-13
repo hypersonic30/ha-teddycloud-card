@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.5.1";
+const CARD_VERSION = "0.5.2";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -578,26 +578,16 @@ class TeddyCloudCard extends HTMLElement {
       message.classList.remove("is-hidden");
     };
 
-    // Safari/WebKit (incl. the HA iOS app's in-app browser) has never
-    // supported Ogg/Opus — the exact format teddyCloud streams, with no
-    // server-side transcoding option to fall back to. teddyCloud's own web
-    // UI has the same limitation and just tells Apple users up front rather
-    // than attempting playback, so we do the same instead of a confusing
-    // native media error.
-    const supportsOggOpus = !!audio.canPlayType('audio/ogg; codecs="opus"');
-
+    // Deliberately not gating on audio.canPlayType('audio/ogg; codecs="opus"')
+    // here: Safari reports that combination as unsupported even though it
+    // can actually play this exact stream (confirmed against teddyCloud's
+    // own web UI on iOS Safari) — canPlayType() is a known-unreliable API,
+    // so we just attempt playback and only react if it genuinely fails.
     grid.addEventListener("click", (ev) => {
       const item = ev.target.closest(".library-item");
       const audioUrl = item?.dataset.audioUrl;
       if (!audioUrl) return;
 
-      if (!supportsOggOpus) {
-        showMessage(
-          "This browser can't play teddyCloud's audio format (Ogg/Opus) — a known Safari/iOS " +
-            "limitation. Try a different browser."
-        );
-        return;
-      }
       message.classList.add("is-hidden");
 
       grid.querySelectorAll(".library-item.is-playing").forEach((el) => {
@@ -610,13 +600,8 @@ class TeddyCloudCard extends HTMLElement {
       audio.play();
     });
 
-    // Belt and braces in case canPlayType is overly optimistic somewhere,
-    // or playback fails for an unrelated reason (e.g. the stream 404s).
     audio.addEventListener("error", () => {
-      showMessage(
-        "Playback failed — this browser may not support teddyCloud's Ogg/Opus audio (a known " +
-          "Safari/iOS limitation)."
-      );
+      showMessage("Playback failed — could not play this Tonie's audio.");
     });
     audio.addEventListener("playing", () => message.classList.add("is-hidden"));
   }
