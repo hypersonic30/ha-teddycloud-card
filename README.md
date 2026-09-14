@@ -118,6 +118,10 @@ already-connected external target to correct its position after the fact. Fixing
 would mean transcoding to a natively-AirPlayable format (e.g. AAC) server-side, which is a much
 bigger undertaking than this project currently warrants.
 
+The player also registers with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API), so locking your phone shows title/cover and play/pause/skip controls on the
+lock screen, and — more importantly — keeps iOS from freezing the page's audio a few minutes into
+background playback.
+
 AirPlay to a receiver on a *different* network (say, a TV at a hotel while you're away on VPN)
 doesn't work at all, and can't: that device has to fetch the stream itself directly and simply has
 no route to your home network. No fix for that without exposing Home Assistant externally.

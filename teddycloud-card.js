@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.6.4";
+const CARD_VERSION = "0.7.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -401,6 +401,8 @@ class TeddyCloudCard extends HTMLElement {
       item.className = "library-item";
       item.title = tonie.title || tonie.ruid || "";
       item.dataset.audioUrl = tonie.audio_url || "";
+      item.dataset.title = tonie.title || tonie.ruid || "";
+      item.dataset.picture = tonie.picture || "";
       item.dataset.search = `${tonie.title || ""} ${tonie.series || ""}`.toLowerCase();
 
       if (tonie.picture) {
@@ -640,6 +642,31 @@ class TeddyCloudCard extends HTMLElement {
       // compensate for teddyCloud's generic header is no longer needed.
       if (audio.src !== audioUrl) audio.src = audioUrl;
       audio.play();
+
+      // Without this, iOS Safari doesn't recognize the page as running a
+      // real, ongoing media session — playback keeps going for a few
+      // minutes after locking the phone, then just gets frozen. The Media
+      // Session API is the standard way to tell the OS "this is legitimate
+      // media the user wants to keep playing," and gets lock-screen
+      // title/artwork/controls as a side effect.
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: item.dataset.title,
+          artist: "TeddyCloud",
+          artwork: item.dataset.picture ? [{ src: item.dataset.picture }] : [],
+        });
+        navigator.mediaSession.setActionHandler("play", () => audio.play());
+        navigator.mediaSession.setActionHandler("pause", () => audio.pause());
+        navigator.mediaSession.setActionHandler("seekbackward", (details) => {
+          audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10));
+        });
+        navigator.mediaSession.setActionHandler("seekforward", (details) => {
+          audio.currentTime = Math.min(
+            audio.duration || Infinity,
+            audio.currentTime + (details.seekOffset || 10)
+          );
+        });
+      }
     });
 
     audio.addEventListener("error", () => {
@@ -647,6 +674,15 @@ class TeddyCloudCard extends HTMLElement {
       const detail = err ? ` (code ${err.code}${err.message ? `: ${err.message}` : ""})` : "";
       showMessage(`Playback failed — could not play this Tonie's audio${detail}.`);
     });
+
+    if ("mediaSession" in navigator) {
+      audio.addEventListener("play", () => {
+        navigator.mediaSession.playbackState = "playing";
+      });
+      audio.addEventListener("pause", () => {
+        navigator.mediaSession.playbackState = "paused";
+      });
+    }
 
     // Switching the AirPlay target to a device that has to fetch/decode
     // the stream itself (see the integration's stream_view docstring)
