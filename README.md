@@ -96,39 +96,34 @@ resources:
 ## Playing cached Tonies (Tonie Library)
 
 With `show_tonie_library: true`, the card shows a search box and a wrapping grid of cover-art
-thumbnails for every Tonie teddyCloud has already cached for this box, and a standard `<audio>`
-bar below it (play/pause, seek, volume). Type in the search box to filter the grid down by title
-or series — handy once you have more Tonies than fit on screen at once. Pick a Tonie and it
-streams straight from teddyCloud's own server — the same header-stripped stream its own web
-player uses — into whatever browser has this dashboard open.
+thumbnails for every Tonie teddyCloud has already cached for this box. Type in the search box to
+filter the grid down by title or series — handy once you have more Tonies than fit on screen at
+once. Picking one opens the integration's own minimal player page in a new tab, with cover art,
+title, and standard play/pause/seek controls.
+
+Playback opens in its own tab rather than inline in this card, on purpose: a full Home Assistant
+dashboard is a heavy, actively-networking single-page app, and background audio kept stopping
+after a few minutes on iOS when played inline — it turned out Home Assistant's own websocket
+connection was dying at the exact same moment ("Connection lost, reconnecting…"), pointing at iOS
+suspending the *entire tab's* background networking rather than anything specific to audio. A
+bare, single-purpose page is a far better candidate for iOS to keep alive in the background, the
+same way a podcast episode link reliably keeps playing when Safari is backgrounded. The player
+page also registers with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) for lock-screen title/cover/play-pause controls.
 
 There's no "casting" involved: this isn't a Home Assistant `media_player`, since there's no real
 device for HA to send a play command to (the Toniebox itself can't be remote-controlled to play).
 It's local playback, the same way a camera preview plays in whichever browser is looking at it.
 
-This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.4.0+.
+This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.5.2+ (specifically
+its `player_url` field).
 
 AirPlay (the icon in Safari's native audio controls) works for a receiver on the same network as
 teddyCloud — e.g. a HomePod or another Mac at home — with one known limitation: switching the
-AirPlay target mid-playback restarts the track at 0 instead of resuming where you were (switching
-back to the phone itself is unaffected). This looks like a genuine Safari/AirPlay limitation for
-audio formats the receiver has to independently fetch and decode rather than receive pre-decoded
-(Ogg/Opus isn't natively AirPlayable) — there's most likely no live channel back to an
-already-connected external target to correct its position after the fact. Fixing it properly
-would mean transcoding to a natively-AirPlayable format (e.g. AAC) server-side, which is a much
-bigger undertaking than this project currently warrants.
-
-The player also registers with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API), so locking your phone shows title/cover and play/pause/skip controls on the
-lock screen.
-
-**Playback stopping after a few minutes in the background (iOS).** On an unstable connection
-(observed over WireGuard away from home — home Wi-Fi may not show this at all), iOS can suspend
-*all* of a backgrounded Safari tab's network activity, including Home Assistant's own websocket
-(you'll see its own "Connection lost, reconnecting…" banner at the same time) — not something
-specific to this card, and not fixable from here. What the card does do: it remembers that
-playback was supposed to be ongoing, and automatically resumes it (from the same position — no
-data is lost) as soon as the tab becomes visible again, instead of leaving it paused until you
-press play yourself.
+AirPlay target mid-playback restarts the track at 0 instead of resuming where you were. This looks
+like a genuine Safari/AirPlay limitation for audio formats the receiver has to independently fetch
+and decode rather than receive pre-decoded (Ogg/Opus isn't natively AirPlayable) — fixing it
+properly would mean transcoding to a natively-AirPlayable format (e.g. AAC) server-side, which is
+a much bigger undertaking than this project currently warrants.
 
 AirPlay to a receiver on a *different* network (say, a TV at a hotel while you're away on VPN)
 doesn't work at all, and can't: that device has to fetch the stream itself directly and simply has

@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.7.2";
+const CARD_VERSION = "0.8.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -248,17 +248,14 @@ class TeddyCloudCard extends HTMLElement {
     // Cover art + titles come straight from teddyCloud's own tag database —
     // built via DOM APIs below (never innerHTML) for the same reason as the
     // rest of this file: entity-supplied strings must never pass through
-    // innerHTML. Audio plays directly from teddyCloud's own stream URL
-    // (already absolute, ?skip_header=true) via a plain <audio controls>,
-    // right in whatever browser has this dashboard open — there's no HA
-    // "device" to cast to here.
+    // innerHTML. Picking a Tonie opens the integration's own standalone
+    // player page in a new tab rather than playing inline here — see
+    // _wireTonieLibrary() for why.
     const tonieLibraryHtml = this._config.show_tonie_library
       ? `
           <div class="tonie-library">
             <input type="search" id="library-search" class="library-search" placeholder="Search Tonies…" />
             <div class="library-grid" id="library-grid"></div>
-            <audio id="library-audio" class="is-hidden" controls preload="auto"></audio>
-            <div class="library-message is-hidden" id="library-message"></div>
           </div>
         `
       : "";
@@ -377,9 +374,9 @@ class TeddyCloudCard extends HTMLElement {
     const library = this._entity("entity_tonie_library");
     const tonies = hasState(library) ? library.attributes?.tonies || [] : [];
 
-    // Cheap to compute, and skips rebuilding the grid (losing the current
-    // "is-playing" highlight) on every poll when the library hasn't
-    // actually changed — same idea as the select-options diff above.
+    // Cheap to compute, and skips needlessly rebuilding the grid on every
+    // poll when the library hasn't actually changed — same idea as the
+    // select-options diff above.
     const signature = tonies.map((tonie) => tonie.ruid).join(",");
     if (this._libraryGridSignature === signature) return;
     this._libraryGridSignature = signature;
@@ -400,9 +397,7 @@ class TeddyCloudCard extends HTMLElement {
       item.type = "button";
       item.className = "library-item";
       item.title = tonie.title || tonie.ruid || "";
-      item.dataset.audioUrl = tonie.audio_url || "";
-      item.dataset.title = tonie.title || tonie.ruid || "";
-      item.dataset.picture = tonie.picture || "";
+      item.dataset.playerUrl = tonie.player_url || "";
       item.dataset.search = `${tonie.title || ""} ${tonie.series || ""}`.toLowerCase();
 
       if (tonie.picture) {
@@ -606,128 +601,32 @@ class TeddyCloudCard extends HTMLElement {
     if (!this._config.show_tonie_library) return;
     const root = this.shadowRoot;
     const grid = root.getElementById("library-grid");
-    const audio = root.getElementById("library-audio");
-    const message = root.getElementById("library-message");
     const searchInput = root.getElementById("library-search");
 
     searchInput.addEventListener("input", () => this._applyLibrarySearch());
 
-    const showMessage = (text) => {
-      message.textContent = text;
-      message.classList.remove("is-hidden");
-    };
-
-    // Deliberately not gating on audio.canPlayType('audio/ogg; codecs="opus"')
-    // here: Safari reports that combination as unsupported even though it
-    // can actually play this exact stream (confirmed against teddyCloud's
-    // own web UI on iOS Safari) — canPlayType() is a known-unreliable API,
-    // so we just attempt playback and only react if it genuinely fails.
+    // Opens the integration's own standalone player page in a new tab,
+    // rather than playing inline here. A full HA dashboard is a heavy,
+    // actively-networking single-page app — background playback kept
+    // stopping after a few minutes on iOS, and it turned out Home
+    // Assistant's own websocket was dying at the exact same moment
+    // ("Connection lost, reconnecting…"), pointing at iOS suspending the
+    // whole tab's background networking rather than anything specific to
+    // audio. A bare, single-purpose page is a far better candidate for
+    // iOS to keep alive in the background — the same reason a podcast
+    // episode link reliably keeps playing when backgrounded. Several
+    // inline workarounds were tried and abandoned for this (Media Session
+    // API registration, preload="auto", auto-resume-on-visible, and two
+    // separate AirPlay-position-handoff attempts, one of which had to be
+    // reverted after it broke AirPlay outright) — see git history around
+    // v0.6.1–v0.7.2 — none of it fixed the underlying background-audio
+    // problem, since the page itself was the thing getting suspended.
     grid.addEventListener("click", (ev) => {
       const item = ev.target.closest(".library-item");
-      const audioUrl = item?.dataset.audioUrl;
-      if (!audioUrl) return;
-
-      message.classList.add("is-hidden");
-
-      grid.querySelectorAll(".library-item.is-playing").forEach((el) => {
-        el.classList.remove("is-playing");
-      });
-      item.classList.add("is-playing");
-
-      audio.classList.remove("is-hidden");
-
-      // Plain audio.src, not a <source type="audio/ogg"> child: the
-      // integration's own stream proxy (v0.5.0+) always sends a correct
-      // Content-Type itself now, so the client-side type hint that used to
-      // compensate for teddyCloud's generic header is no longer needed.
-      if (audio.src !== audioUrl) audio.src = audioUrl;
-      audio.play();
-      this._wantsPlaying = true;
-
-      // Without this, iOS Safari doesn't recognize the page as running a
-      // real, ongoing media session — playback keeps going for a few
-      // minutes after locking the phone, then just gets frozen. The Media
-      // Session API is the standard way to tell the OS "this is legitimate
-      // media the user wants to keep playing," and gets lock-screen
-      // title/artwork/controls as a side effect.
-      if ("mediaSession" in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: item.dataset.title,
-          artist: "TeddyCloud",
-          artwork: item.dataset.picture ? [{ src: item.dataset.picture }] : [],
-        });
-        navigator.mediaSession.setActionHandler("play", () => audio.play());
-        navigator.mediaSession.setActionHandler("pause", () => audio.pause());
-        navigator.mediaSession.setActionHandler("seekbackward", (details) => {
-          audio.currentTime = Math.max(0, audio.currentTime - (details.seekOffset || 10));
-        });
-        navigator.mediaSession.setActionHandler("seekforward", (details) => {
-          audio.currentTime = Math.min(
-            audio.duration || Infinity,
-            audio.currentTime + (details.seekOffset || 10)
-          );
-        });
-      }
+      const playerUrl = item?.dataset.playerUrl;
+      if (!playerUrl) return;
+      window.open(playerUrl, "_blank");
     });
-
-    audio.addEventListener("error", () => {
-      const err = audio.error;
-      const detail = err ? ` (code ${err.code}${err.message ? `: ${err.message}` : ""})` : "";
-      showMessage(`Playback failed — could not play this Tonie's audio${detail}.`);
-    });
-
-    if ("mediaSession" in navigator) {
-      audio.addEventListener("play", () => {
-        navigator.mediaSession.playbackState = "playing";
-      });
-      audio.addEventListener("pause", () => {
-        navigator.mediaSession.playbackState = "paused";
-      });
-    }
-
-    // iOS suspends background network activity for a backgrounded Safari
-    // tab after a while — both Home Assistant's own websocket ("Connection
-    // lost, reconnecting…") and this audio stream get cut at the same
-    // time, and the audio element just ends up paused (not errored) as a
-    // result. Manually pausing and playing again once back in the app
-    // resumes cleanly from the same position, so automate exactly that:
-    // remember whether the user actually wants playback going, and nudge
-    // it again whenever the tab becomes visible if it silently stopped
-    // while hidden. A pause that happens while visible is a real user
-    // action (or natural end-of-track) and is left alone.
-    audio.addEventListener("pause", () => {
-      if (document.visibilityState === "visible") this._wantsPlaying = false;
-    });
-    audio.addEventListener("ended", () => {
-      this._wantsPlaying = false;
-    });
-    // _wireTonieLibrary() itself can re-run (setConfig()/_buildShell() on
-    // every visual-editor edit), but document is never rebuilt like the
-    // shadow DOM is — guard so repeated edits don't pile up duplicate
-    // listeners, and look the audio element up fresh each time rather
-    // than closing over this specific (possibly since-replaced) one.
-    if (!this._wiredVisibilityHandler) {
-      this._wiredVisibilityHandler = true;
-      document.addEventListener("visibilitychange", () => {
-        if (document.visibilityState !== "visible" || !this._wantsPlaying) return;
-        const currentAudio = this.shadowRoot?.getElementById("library-audio");
-        if (currentAudio?.paused) currentAudio.play().catch(() => {});
-      });
-    }
-
-    // Switching the AirPlay target to a device that has to fetch/decode
-    // the stream itself (see the integration's stream_view docstring)
-    // always restarts it at 0 — Safari doesn't hand the current position
-    // to the new target on connect. Tried and reverted two fixes for
-    // this (see git history around v0.6.2/v0.6.3): poking .currentTime on
-    // the already-connected session did nothing, and forcing a source
-    // reload broke AirPlay entirely (no playback at all, and switching
-    // back to the phone also started restarting). There's most likely no
-    // live channel back to an independently-fetching AirPlay target once
-    // connected, and nothing else worth trying without a real transcode
-    // to a natively-AirPlayable format — not worth the added complexity
-    // for this. Known limitation, documented in the card's README.
-    audio.addEventListener("playing", () => message.classList.add("is-hidden"));
   }
 
   _styles() {
@@ -954,21 +853,6 @@ class TeddyCloudCard extends HTMLElement {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-      }
-      .library-item.is-playing {
-        color: var(--primary-color);
-      }
-      .library-item.is-playing img,
-      .library-item.is-playing ha-icon {
-        outline: 2px solid var(--primary-color);
-      }
-      #library-audio {
-        width: 100%;
-        height: 32px;
-      }
-      .library-message {
-        font-size: 0.8rem;
-        color: var(--error-color, #db4437);
       }
     `;
   }
