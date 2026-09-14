@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.7.1";
+const CARD_VERSION = "0.7.2";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -642,6 +642,7 @@ class TeddyCloudCard extends HTMLElement {
       // compensate for teddyCloud's generic header is no longer needed.
       if (audio.src !== audioUrl) audio.src = audioUrl;
       audio.play();
+      this._wantsPlaying = true;
 
       // Without this, iOS Safari doesn't recognize the page as running a
       // real, ongoing media session — playback keeps going for a few
@@ -681,6 +682,36 @@ class TeddyCloudCard extends HTMLElement {
       });
       audio.addEventListener("pause", () => {
         navigator.mediaSession.playbackState = "paused";
+      });
+    }
+
+    // iOS suspends background network activity for a backgrounded Safari
+    // tab after a while — both Home Assistant's own websocket ("Connection
+    // lost, reconnecting…") and this audio stream get cut at the same
+    // time, and the audio element just ends up paused (not errored) as a
+    // result. Manually pausing and playing again once back in the app
+    // resumes cleanly from the same position, so automate exactly that:
+    // remember whether the user actually wants playback going, and nudge
+    // it again whenever the tab becomes visible if it silently stopped
+    // while hidden. A pause that happens while visible is a real user
+    // action (or natural end-of-track) and is left alone.
+    audio.addEventListener("pause", () => {
+      if (document.visibilityState === "visible") this._wantsPlaying = false;
+    });
+    audio.addEventListener("ended", () => {
+      this._wantsPlaying = false;
+    });
+    // _wireTonieLibrary() itself can re-run (setConfig()/_buildShell() on
+    // every visual-editor edit), but document is never rebuilt like the
+    // shadow DOM is — guard so repeated edits don't pile up duplicate
+    // listeners, and look the audio element up fresh each time rather
+    // than closing over this specific (possibly since-replaced) one.
+    if (!this._wiredVisibilityHandler) {
+      this._wiredVisibilityHandler = true;
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState !== "visible" || !this._wantsPlaying) return;
+        const currentAudio = this.shadowRoot?.getElementById("library-audio");
+        if (currentAudio?.paused) currentAudio.play().catch(() => {});
       });
     }
 

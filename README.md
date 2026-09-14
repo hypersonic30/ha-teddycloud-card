@@ -119,8 +119,16 @@ would mean transcoding to a natively-AirPlayable format (e.g. AAC) server-side, 
 bigger undertaking than this project currently warrants.
 
 The player also registers with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API), so locking your phone shows title/cover and play/pause/skip controls on the
-lock screen, and — more importantly — keeps iOS from freezing the page's audio a few minutes into
-background playback.
+lock screen.
+
+**Playback stopping after a few minutes in the background (iOS).** On an unstable connection
+(observed over WireGuard away from home — home Wi-Fi may not show this at all), iOS can suspend
+*all* of a backgrounded Safari tab's network activity, including Home Assistant's own websocket
+(you'll see its own "Connection lost, reconnecting…" banner at the same time) — not something
+specific to this card, and not fixable from here. What the card does do: it remembers that
+playback was supposed to be ongoing, and automatically resumes it (from the same position — no
+data is lost) as soon as the tab becomes visible again, instead of leaving it paused until you
+press play yourself.
 
 AirPlay to a receiver on a *different* network (say, a TV at a hotel while you're away on VPN)
 doesn't work at all, and can't: that device has to fetch the stream itself directly and simply has
