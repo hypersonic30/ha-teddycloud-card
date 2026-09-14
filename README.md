@@ -108,11 +108,19 @@ It's local playback, the same way a camera preview plays in whichever browser is
 
 This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.4.0+.
 
-AirPlay (the icon in Safari's native audio controls) works too for a receiver on the same
-network as teddyCloud — e.g. a HomePod or another Mac at home. It won't work for a receiver on a
-different network (say, a TV at a hotel while you're away on VPN) since that device has to fetch
-the stream itself directly, and it simply has no route to your home network — no fix for that
-without exposing Home Assistant externally.
+AirPlay (the icon in Safari's native audio controls) works for a receiver on the same network as
+teddyCloud — e.g. a HomePod or another Mac at home — with one known limitation: switching the
+AirPlay target mid-playback restarts the track at 0 instead of resuming where you were (switching
+back to the phone itself is unaffected). This looks like a genuine Safari/AirPlay limitation for
+audio formats the receiver has to independently fetch and decode rather than receive pre-decoded
+(Ogg/Opus isn't natively AirPlayable) — there's most likely no live channel back to an
+already-connected external target to correct its position after the fact. Fixing it properly
+would mean transcoding to a natively-AirPlayable format (e.g. AAC) server-side, which is a much
+bigger undertaking than this project currently warrants.
+
+AirPlay to a receiver on a *different* network (say, a TV at a hotel while you're away on VPN)
+doesn't work at all, and can't: that device has to fetch the stream itself directly and simply has
+no route to your home network. No fix for that without exposing Home Assistant externally.
 
 ## Assigning a Tonie via NFC dump
 
