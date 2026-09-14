@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.7.0";
+const CARD_VERSION = "0.7.1";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -257,7 +257,7 @@ class TeddyCloudCard extends HTMLElement {
           <div class="tonie-library">
             <input type="search" id="library-search" class="library-search" placeholder="Search Tonies…" />
             <div class="library-grid" id="library-grid"></div>
-            <audio id="library-audio" class="is-hidden" controls></audio>
+            <audio id="library-audio" class="is-hidden" controls preload="auto"></audio>
             <div class="library-message is-hidden" id="library-message"></div>
           </div>
         `
