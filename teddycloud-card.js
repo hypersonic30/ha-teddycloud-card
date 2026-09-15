@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.9.1";
+const CARD_VERSION = "0.10.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -248,16 +248,14 @@ class TeddyCloudCard extends HTMLElement {
     // Cover art + titles come straight from teddyCloud's own tag database —
     // built via DOM APIs below (never innerHTML) for the same reason as the
     // rest of this file: entity-supplied strings must never pass through
-    // innerHTML. See _wireTonieLibrary() for how playback is made
-    // background-reliable despite living inline in this (heavy, HA
-    // websocket-carrying) dashboard page.
+    // innerHTML. Picking a Tonie opens the integration's own standalone
+    // player page in a new tab rather than playing inline here — see
+    // _wireTonieLibrary() for why.
     const tonieLibraryHtml = this._config.show_tonie_library
       ? `
           <div class="tonie-library">
             <input type="search" id="library-search" class="library-search" placeholder="Search Tonies…" />
             <div class="library-grid" id="library-grid"></div>
-            <audio id="library-audio" class="is-hidden" controls></audio>
-            <div class="library-message is-hidden" id="library-message"></div>
           </div>
         `
       : "";
@@ -399,8 +397,7 @@ class TeddyCloudCard extends HTMLElement {
       item.type = "button";
       item.className = "library-item";
       item.title = tonie.title || tonie.ruid || "";
-      item.dataset.audioUrl = tonie.audio_url || "";
-      item.dataset.picture = tonie.picture || "";
+      item.dataset.playerUrl = tonie.player_url || "";
       item.dataset.search = `${tonie.title || ""} ${tonie.series || ""}`.toLowerCase();
 
       if (tonie.picture) {
@@ -604,91 +601,32 @@ class TeddyCloudCard extends HTMLElement {
     if (!this._config.show_tonie_library) return;
     const root = this.shadowRoot;
     const grid = root.getElementById("library-grid");
-    const audio = root.getElementById("library-audio");
-    const message = root.getElementById("library-message");
     const searchInput = root.getElementById("library-search");
 
     searchInput.addEventListener("input", () => this._applyLibrarySearch());
 
-    const showMessage = (text, isError) => {
-      message.textContent = text;
-      message.classList.toggle("err", !!isError);
-      message.classList.remove("is-hidden");
-    };
-
-    // Downloads the whole file into memory before starting playback,
-    // instead of streaming it live: once loaded, playback needs no network
-    // at all, so nothing iOS does to a backgrounded tab's connections can
-    // interrupt it (confirmed: Home Assistant's own websocket was dying at
-    // the exact same moment playback used to stop, pointing at iOS
-    // suspending the whole tab's background networking).
+    // Opens the integration's own standalone player page in a new tab,
+    // rather than playing inline here. Tried inline playback twice more
+    // after the reasoning below was first written (see git history around
+    // v0.8.0–v0.9.1): even fully-local blob: playback (no network
+    // dependency at all once loaded) still got wiped out after a few
+    // minutes, together with the whole player UI disappearing — pointing
+    // at Home Assistant's own frontend rebuilding the dashboard view (and
+    // every card in it, this one included) after recovering from a
+    // websocket outage, not at anything about audio or networking
+    // specifically. A standalone tab isn't part of that dashboard's
+    // lifecycle at all, so it can't be affected by HA rebuilding it.
     //
-    // An earlier version tried to play the live stream immediately while
-    // *also* fetching the whole file in the background, to avoid this
-    // upfront wait — that meant two concurrent connections to the same
-    // file on teddyCloud's own (simple, embedded) server, which surfaced
-    // as playback silently stalling forever right around 100% buffered
-    // and a bogus reported duration. Back to one connection at a time.
+    // (Earlier still: a full HA dashboard is also a heavy, actively
+    // networking page, and Home Assistant's own websocket was observed
+    // dying at the same moment inline playback first stopped — the
+    // reason a live stream alone wasn't reliable inline either.)
     grid.addEventListener("click", (ev) => {
       const item = ev.target.closest(".library-item");
-      const audioUrl = item?.dataset.audioUrl;
-      if (!audioUrl) return;
-
-      message.classList.add("is-hidden");
-      audio.classList.remove("is-hidden");
-
-      if ("mediaSession" in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-          title: item.title || "",
-          artist: "TeddyCloud",
-          artwork: item.dataset.picture ? [{ src: item.dataset.picture }] : [],
-        });
-      }
-
-      (async () => {
-        try {
-          showMessage("Buffering…");
-          const resp = await fetch(audioUrl);
-          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-          const total = Number(resp.headers.get("Content-Length")) || 0;
-          const reader = resp.body.getReader();
-          const chunks = [];
-          let received = 0;
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            chunks.push(value);
-            received += value.length;
-            const mb = (received / 1048576).toFixed(1);
-            showMessage(
-              total
-                ? `Buffering… ${Math.round((received / total) * 100)}% (${mb} MB)`
-                : `Buffering… ${mb} MB`
-            );
-          }
-          audio.src = URL.createObjectURL(new Blob(chunks, { type: "audio/ogg" }));
-          message.classList.add("is-hidden");
-          audio.play();
-        } catch (err) {
-          showMessage(`Failed to load this Tonie's audio (${err.message}).`, true);
-        }
-      })();
+      const playerUrl = item?.dataset.playerUrl;
+      if (!playerUrl) return;
+      window.open(playerUrl, "_blank");
     });
-
-    audio.addEventListener("error", () => {
-      const err = audio.error;
-      const detail = err ? ` (code ${err.code}${err.message ? `: ${err.message}` : ""})` : "";
-      showMessage(`Playback failed — could not play this Tonie's audio${detail}.`, true);
-    });
-
-    if ("mediaSession" in navigator) {
-      audio.addEventListener("play", () => {
-        navigator.mediaSession.playbackState = "playing";
-      });
-      audio.addEventListener("pause", () => {
-        navigator.mediaSession.playbackState = "paused";
-      });
-    }
   }
 
   _styles() {
@@ -915,17 +853,6 @@ class TeddyCloudCard extends HTMLElement {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-      }
-      #library-audio {
-        width: 100%;
-        height: 32px;
-      }
-      .library-message {
-        font-size: 0.8rem;
-        color: var(--secondary-text-color);
-      }
-      .library-message.err {
-        color: var(--error-color, #db4437);
       }
     `;
   }

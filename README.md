@@ -96,35 +96,35 @@ resources:
 ## Playing cached Tonies (Tonie Library)
 
 With `show_tonie_library: true`, the card shows a search box and a wrapping grid of cover-art
-thumbnails for every Tonie teddyCloud has already cached for this box, and a standard `<audio>`
-bar below it (play/pause, seek, volume). Type in the search box to filter the grid down by title
-or series — handy once you have more Tonies than fit on screen at once. Pick a Tonie and it starts
-playing right away.
+thumbnails for every Tonie teddyCloud has already cached for this box. Type in the search box to
+filter the grid down by title or series — handy once you have more Tonies than fit on screen at
+once. Picking one opens the integration's own minimal player page in a new tab, with cover art,
+title, and standard play/pause/seek controls.
+
+Playback deliberately opens in its own tab rather than inline in this card. Two different inline
+approaches were tried and both failed the same way in the end: even once playback needed no
+network at all (the whole file downloaded into memory first, then played from that local copy —
+see the integration's player page for why that part matters), it still got wiped out — together
+with the entire player UI disappearing — after a few minutes. That points at Home Assistant's own
+frontend rebuilding the dashboard view (and every card in it) after recovering from a websocket
+outage, which is unrelated to audio or networking specifically and not something this card can
+prevent. A standalone tab isn't part of that dashboard's lifecycle at all, so rebuilding the
+dashboard can't touch it. The player page also registers with the
+[Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) for
+lock-screen title/cover/play-pause controls.
 
 There's no "casting" involved: this isn't a Home Assistant `media_player`, since there's no real
 device for HA to send a play command to (the Toniebox itself can't be remote-controlled to play).
-It's local playback, the same way a camera preview plays in whichever browser is looking at it —
-and it registers with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) for lock-screen title/cover/play-pause controls.
+It's local playback, the same way a camera preview plays in whichever browser is looking at it.
 
-**Reliable background/lock-screen playback on iOS.** Picking a Tonie downloads the whole file into
-memory first (you'll see a "Buffering… N%" note — usually well under a minute even for a
-multi-hour recording) and only then starts playback, from that local copy rather than a live
-stream. From that point on, playback needs no network connection at all, so nothing iOS does to a
-backgrounded tab can interrupt it — Home Assistant's own websocket connection was found to drop at
-the exact same moment playback used to stop, pointing at iOS suspending the whole tab's background
-networking rather than anything specific to audio.
+This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.6.2+ (specifically
+its `player_url` field).
 
-An earlier version tried to start playback immediately from the live stream while downloading the
-full copy in the background, to skip the upfront wait — that meant two concurrent connections to
-the same file on teddyCloud's own simple embedded server, which it doesn't handle: playback would
-silently stall right around "100%" buffered, with a bogus duration shown. One connection at a time
-turned out to be a hard requirement here, not just a nice-to-have.
-
-One trade-off either way: AirPlay to another device doesn't work once playback is running from the
-local copy, since a receiver fetches the stream URL itself and a browser-local `blob:` URL has no
-such network address for it to fetch.
-
-This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.6.2+.
+AirPlay doesn't work with this player page: it always plays from a fully downloaded local copy
+(see above), and a receiver fetches the stream URL itself — a browser-local `blob:` URL has no
+network address for it to fetch. It wouldn't work for a receiver on a *different* network anyway
+(say, a TV at a hotel while you're away on VPN): that device has to fetch the stream directly and
+simply has no route to your home network.
 
 ## Assigning a Tonie via NFC dump
 
