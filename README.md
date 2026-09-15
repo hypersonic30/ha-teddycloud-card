@@ -106,18 +106,23 @@ device for HA to send a play command to (the Toniebox itself can't be remote-con
 It's local playback, the same way a camera preview plays in whichever browser is looking at it —
 and it registers with the [Media Session API](https://developer.mozilla.org/en-US/docs/Web/API/Media_Session_API) for lock-screen title/cover/play-pause controls.
 
-**Reliable background/lock-screen playback on iOS.** Playback starts immediately from
-teddyCloud's live stream, while the whole file downloads into memory in the background; once that
-finishes (usually well under a minute even for a multi-hour recording — you'll see a brief
-"Buffering… N%" note), it seamlessly swaps to the local copy at the same position. From that point
-on, playback needs no network connection at all, so nothing iOS does to a backgrounded tab can
-interrupt it — this is what makes inline playback here work reliably, after failing outright with
-a live stream alone (Home Assistant's own websocket was found to drop at the exact same moment
-playback stopped, pointing at iOS suspending the whole tab's background networking, not anything
-specific to audio). The trade-off: there's a narrow window, until that background download
-finishes, where backgrounding could still interrupt playback the same as before — and once swapped
-to the local copy, AirPlay to another device stops working, since a receiver fetches the stream
-URL itself and a local blob has no such URL (AirPlay still works during that initial window).
+**Reliable background/lock-screen playback on iOS.** Picking a Tonie downloads the whole file into
+memory first (you'll see a "Buffering… N%" note — usually well under a minute even for a
+multi-hour recording) and only then starts playback, from that local copy rather than a live
+stream. From that point on, playback needs no network connection at all, so nothing iOS does to a
+backgrounded tab can interrupt it — Home Assistant's own websocket connection was found to drop at
+the exact same moment playback used to stop, pointing at iOS suspending the whole tab's background
+networking rather than anything specific to audio.
+
+An earlier version tried to start playback immediately from the live stream while downloading the
+full copy in the background, to skip the upfront wait — that meant two concurrent connections to
+the same file on teddyCloud's own simple embedded server, which it doesn't handle: playback would
+silently stall right around "100%" buffered, with a bogus duration shown. One connection at a time
+turned out to be a hard requirement here, not just a nice-to-have.
+
+One trade-off either way: AirPlay to another device doesn't work once playback is running from the
+local copy, since a receiver fetches the stream URL itself and a browser-local `blob:` URL has no
+such network address for it to fetch.
 
 This requires the `entity_tonie_library` sensor from ha-teddycloud-integration v0.6.2+.
 

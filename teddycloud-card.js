@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.9.0";
+const CARD_VERSION = "0.9.1";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -616,25 +616,19 @@ class TeddyCloudCard extends HTMLElement {
       message.classList.remove("is-hidden");
     };
 
-    // Plays inline again (v0.8.0 moved this to a standalone page in a new
-    // tab, opened via window.open(), after inline playback kept stopping
-    // in the background — traced to Home Assistant's own websocket dying
-    // at the exact same moment, meaning iOS was suspending the whole
-    // dashboard tab's background *networking*, not anything specific to
-    // audio or to this being an HA page). The actual fix ends up making
-    // the new-tab workaround unnecessary: play the live stream
-    // immediately, while separately downloading the whole file into
-    // memory in the background, then swap to that local copy at the same
-    // position once it's ready (usually well under a minute even for a
-    // multi-hour recording). From that point on playback needs no network
-    // at all, so it no longer matters if HA's websocket — or anything
-    // else in this page — gets suspended in the background.
+    // Downloads the whole file into memory before starting playback,
+    // instead of streaming it live: once loaded, playback needs no network
+    // at all, so nothing iOS does to a backgrounded tab's connections can
+    // interrupt it (confirmed: Home Assistant's own websocket was dying at
+    // the exact same moment playback used to stop, pointing at iOS
+    // suspending the whole tab's background networking).
     //
-    // Trade-off: once swapped to the local blob: copy, AirPlay to another
-    // device stops working — a receiver fetches the URL itself, and a
-    // blob: URL only exists in this page's own memory, not on the
-    // network. AirPlay still works during the initial live-stream window
-    // before the swap happens.
+    // An earlier version tried to play the live stream immediately while
+    // *also* fetching the whole file in the background, to avoid this
+    // upfront wait — that meant two concurrent connections to the same
+    // file on teddyCloud's own (simple, embedded) server, which surfaced
+    // as playback silently stalling forever right around 100% buffered
+    // and a bogus reported duration. Back to one connection at a time.
     grid.addEventListener("click", (ev) => {
       const item = ev.target.closest(".library-item");
       const audioUrl = item?.dataset.audioUrl;
@@ -642,8 +636,6 @@ class TeddyCloudCard extends HTMLElement {
 
       message.classList.add("is-hidden");
       audio.classList.remove("is-hidden");
-      audio.src = audioUrl;
-      audio.play();
 
       if ("mediaSession" in navigator) {
         navigator.mediaSession.metadata = new MediaMetadata({
@@ -655,6 +647,7 @@ class TeddyCloudCard extends HTMLElement {
 
       (async () => {
         try {
+          showMessage("Buffering…");
           const resp = await fetch(audioUrl);
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const total = Number(resp.headers.get("Content-Length")) || 0;
@@ -673,25 +666,11 @@ class TeddyCloudCard extends HTMLElement {
                 : `Buffering… ${mb} MB`
             );
           }
-          // A different Tonie may have been picked while this was still
-          // downloading — don't swap stale data over current playback.
-          if (audio.src !== audioUrl) return;
-
-          const wasPlaying = !audio.paused;
-          const position = audio.currentTime;
-          const onSwapped = () => {
-            audio.removeEventListener("loadedmetadata", onSwapped);
-            audio.currentTime = position;
-            if (wasPlaying) audio.play();
-          };
-          audio.addEventListener("loadedmetadata", onSwapped);
           audio.src = URL.createObjectURL(new Blob(chunks, { type: "audio/ogg" }));
           message.classList.add("is-hidden");
+          audio.play();
         } catch (err) {
-          // Background download failed (e.g. a dropped connection) — the
-          // live stream keeps playing as far as the network allows, so
-          // this isn't surfaced as a playback error.
-          message.classList.add("is-hidden");
+          showMessage(`Failed to load this Tonie's audio (${err.message}).`, true);
         }
       })();
     });
