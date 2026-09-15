@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "0.8.0";
+const CARD_VERSION = "0.9.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -248,14 +248,16 @@ class TeddyCloudCard extends HTMLElement {
     // Cover art + titles come straight from teddyCloud's own tag database —
     // built via DOM APIs below (never innerHTML) for the same reason as the
     // rest of this file: entity-supplied strings must never pass through
-    // innerHTML. Picking a Tonie opens the integration's own standalone
-    // player page in a new tab rather than playing inline here — see
-    // _wireTonieLibrary() for why.
+    // innerHTML. See _wireTonieLibrary() for how playback is made
+    // background-reliable despite living inline in this (heavy, HA
+    // websocket-carrying) dashboard page.
     const tonieLibraryHtml = this._config.show_tonie_library
       ? `
           <div class="tonie-library">
             <input type="search" id="library-search" class="library-search" placeholder="Search Tonies…" />
             <div class="library-grid" id="library-grid"></div>
+            <audio id="library-audio" class="is-hidden" controls></audio>
+            <div class="library-message is-hidden" id="library-message"></div>
           </div>
         `
       : "";
@@ -397,7 +399,8 @@ class TeddyCloudCard extends HTMLElement {
       item.type = "button";
       item.className = "library-item";
       item.title = tonie.title || tonie.ruid || "";
-      item.dataset.playerUrl = tonie.player_url || "";
+      item.dataset.audioUrl = tonie.audio_url || "";
+      item.dataset.picture = tonie.picture || "";
       item.dataset.search = `${tonie.title || ""} ${tonie.series || ""}`.toLowerCase();
 
       if (tonie.picture) {
@@ -601,32 +604,112 @@ class TeddyCloudCard extends HTMLElement {
     if (!this._config.show_tonie_library) return;
     const root = this.shadowRoot;
     const grid = root.getElementById("library-grid");
+    const audio = root.getElementById("library-audio");
+    const message = root.getElementById("library-message");
     const searchInput = root.getElementById("library-search");
 
     searchInput.addEventListener("input", () => this._applyLibrarySearch());
 
-    // Opens the integration's own standalone player page in a new tab,
-    // rather than playing inline here. A full HA dashboard is a heavy,
-    // actively-networking single-page app — background playback kept
-    // stopping after a few minutes on iOS, and it turned out Home
-    // Assistant's own websocket was dying at the exact same moment
-    // ("Connection lost, reconnecting…"), pointing at iOS suspending the
-    // whole tab's background networking rather than anything specific to
-    // audio. A bare, single-purpose page is a far better candidate for
-    // iOS to keep alive in the background — the same reason a podcast
-    // episode link reliably keeps playing when backgrounded. Several
-    // inline workarounds were tried and abandoned for this (Media Session
-    // API registration, preload="auto", auto-resume-on-visible, and two
-    // separate AirPlay-position-handoff attempts, one of which had to be
-    // reverted after it broke AirPlay outright) — see git history around
-    // v0.6.1–v0.7.2 — none of it fixed the underlying background-audio
-    // problem, since the page itself was the thing getting suspended.
+    const showMessage = (text, isError) => {
+      message.textContent = text;
+      message.classList.toggle("err", !!isError);
+      message.classList.remove("is-hidden");
+    };
+
+    // Plays inline again (v0.8.0 moved this to a standalone page in a new
+    // tab, opened via window.open(), after inline playback kept stopping
+    // in the background — traced to Home Assistant's own websocket dying
+    // at the exact same moment, meaning iOS was suspending the whole
+    // dashboard tab's background *networking*, not anything specific to
+    // audio or to this being an HA page). The actual fix ends up making
+    // the new-tab workaround unnecessary: play the live stream
+    // immediately, while separately downloading the whole file into
+    // memory in the background, then swap to that local copy at the same
+    // position once it's ready (usually well under a minute even for a
+    // multi-hour recording). From that point on playback needs no network
+    // at all, so it no longer matters if HA's websocket — or anything
+    // else in this page — gets suspended in the background.
+    //
+    // Trade-off: once swapped to the local blob: copy, AirPlay to another
+    // device stops working — a receiver fetches the URL itself, and a
+    // blob: URL only exists in this page's own memory, not on the
+    // network. AirPlay still works during the initial live-stream window
+    // before the swap happens.
     grid.addEventListener("click", (ev) => {
       const item = ev.target.closest(".library-item");
-      const playerUrl = item?.dataset.playerUrl;
-      if (!playerUrl) return;
-      window.open(playerUrl, "_blank");
+      const audioUrl = item?.dataset.audioUrl;
+      if (!audioUrl) return;
+
+      message.classList.add("is-hidden");
+      audio.classList.remove("is-hidden");
+      audio.src = audioUrl;
+      audio.play();
+
+      if ("mediaSession" in navigator) {
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: item.title || "",
+          artist: "TeddyCloud",
+          artwork: item.dataset.picture ? [{ src: item.dataset.picture }] : [],
+        });
+      }
+
+      (async () => {
+        try {
+          const resp = await fetch(audioUrl);
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          const total = Number(resp.headers.get("Content-Length")) || 0;
+          const reader = resp.body.getReader();
+          const chunks = [];
+          let received = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            received += value.length;
+            const mb = (received / 1048576).toFixed(1);
+            showMessage(
+              total
+                ? `Buffering… ${Math.round((received / total) * 100)}% (${mb} MB)`
+                : `Buffering… ${mb} MB`
+            );
+          }
+          // A different Tonie may have been picked while this was still
+          // downloading — don't swap stale data over current playback.
+          if (audio.src !== audioUrl) return;
+
+          const wasPlaying = !audio.paused;
+          const position = audio.currentTime;
+          const onSwapped = () => {
+            audio.removeEventListener("loadedmetadata", onSwapped);
+            audio.currentTime = position;
+            if (wasPlaying) audio.play();
+          };
+          audio.addEventListener("loadedmetadata", onSwapped);
+          audio.src = URL.createObjectURL(new Blob(chunks, { type: "audio/ogg" }));
+          message.classList.add("is-hidden");
+        } catch (err) {
+          // Background download failed (e.g. a dropped connection) — the
+          // live stream keeps playing as far as the network allows, so
+          // this isn't surfaced as a playback error.
+          message.classList.add("is-hidden");
+        }
+      })();
     });
+
+    audio.addEventListener("error", () => {
+      const err = audio.error;
+      const detail = err ? ` (code ${err.code}${err.message ? `: ${err.message}` : ""})` : "";
+      showMessage(`Playback failed — could not play this Tonie's audio${detail}.`, true);
+    });
+
+    if ("mediaSession" in navigator) {
+      audio.addEventListener("play", () => {
+        navigator.mediaSession.playbackState = "playing";
+      });
+      audio.addEventListener("pause", () => {
+        navigator.mediaSession.playbackState = "paused";
+      });
+    }
   }
 
   _styles() {
@@ -853,6 +936,17 @@ class TeddyCloudCard extends HTMLElement {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      #library-audio {
+        width: 100%;
+        height: 32px;
+      }
+      .library-message {
+        font-size: 0.8rem;
+        color: var(--secondary-text-color);
+      }
+      .library-message.err {
+        color: var(--error-color, #db4437);
       }
     `;
   }
