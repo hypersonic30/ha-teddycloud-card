@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.2";
+const CARD_VERSION = "1.1.3";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -155,14 +155,6 @@ class TeddyCloudCard extends HTMLElement {
     this._wishlistInterval = null;
     if (this._onDocumentClickForWishlist) {
       document.removeEventListener("click", this._onDocumentClickForWishlist);
-    }
-    // The portal lives outside this card's own DOM subtree (appended
-    // directly to document.body - see _ensureWishlistPortal()), so it
-    // wouldn't otherwise be cleaned up just by this card being removed.
-    this._stopWishlistPortalTracking();
-    if (this._wishlistPortalEl) {
-      this._wishlistPortalEl.remove();
-      this._wishlistPortalEl = null;
     }
   }
 
@@ -301,6 +293,7 @@ class TeddyCloudCard extends HTMLElement {
       ? `
           <div class="wishlist">
             <input type="search" id="wishlist-search" class="wishlist-search" placeholder="Search Tonies to wish for…" autocomplete="off" />
+            <div class="wishlist-suggestions is-hidden" id="wishlist-suggestions"></div>
             <div class="wishlist-items" id="wishlist-items"></div>
           </div>
         `
@@ -677,112 +670,22 @@ class TeddyCloudCard extends HTMLElement {
     });
   }
 
-  // The dropdown must never be clipped or covered by a sibling dashboard
-  // card below it - but position:absolute inside this card's own shadow
-  // DOM only escapes THIS card's bounds visually; it's still constrained
-  // by whatever stacking/containment context Home Assistant's dashboard
-  // layout puts around each card (masonry/sections views commonly isolate
-  // each card for rendering performance), which a z-index set anywhere
-  // inside our own card - even on the host itself - cannot escape. So
-  // instead this portals the dropdown to a dedicated element appended
-  // directly to document.body (position: fixed, tracked to the search
-  // input's screen position), the standard fix for exactly this class of
-  // "popover must outrank everything" problem in any component that can
-  // be nested arbitrarily deep in someone else's layout.
-  _ensureWishlistPortal() {
-    if (this._wishlistPortalEl) return this._wishlistPortalEl;
-    const el = document.createElement("div");
-    el.style.position = "fixed";
-    el.style.zIndex = "9999";
-    el.style.display = "none";
-    const shadow = el.attachShadow({ mode: "open" });
-    shadow.innerHTML = `
-      <style>
-        .wishlist-suggestions {
-          background: var(--card-background-color);
-          color: var(--primary-text-color);
-          border: 1px solid var(--divider-color);
-          border-radius: 6px;
-          max-height: 220px;
-          overflow-y: auto;
-          box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0, 0, 0, 0.3));
-        }
-        .wishlist-suggestion {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          width: 100%;
-          box-sizing: border-box;
-          padding: 6px 10px;
-          background: none;
-          border: none;
-          font: inherit;
-          font-size: 0.85rem;
-          color: var(--primary-text-color);
-          text-align: left;
-          cursor: pointer;
-        }
-        .wishlist-suggestion:hover {
-          background: var(--secondary-background-color);
-        }
-        .wishlist-suggestion img,
-        .wishlist-suggestion ha-icon {
-          width: 32px;
-          height: 32px;
-          border-radius: 6px;
-          object-fit: cover;
-          flex: 0 0 auto;
-          background: var(--secondary-background-color);
-        }
-        .wishlist-suggestion span {
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-      </style>
-      <div class="wishlist-suggestions" id="list"></div>
-    `;
-    document.body.appendChild(el);
-    this._wishlistPortalEl = el;
-    return el;
-  }
-
-  _positionWishlistPortal() {
-    const portal = this._wishlistPortalEl;
-    const input = this.shadowRoot?.getElementById("wishlist-search");
-    if (!portal || !input) return;
-    const rect = input.getBoundingClientRect();
-    portal.style.left = `${rect.left}px`;
-    portal.style.top = `${rect.bottom + 4}px`;
-    portal.style.width = `${rect.width}px`;
-  }
-
-  _startWishlistPortalTracking() {
-    if (this._onWishlistPortalReposition) return;
-    // Dashboards scroll (the whole page, or a nested scrollable section) -
-    // capture-phase listens on every scroll container, not just window's.
-    this._onWishlistPortalReposition = () => this._positionWishlistPortal();
-    window.addEventListener("scroll", this._onWishlistPortalReposition, true);
-    window.addEventListener("resize", this._onWishlistPortalReposition);
-  }
-
-  _stopWishlistPortalTracking() {
-    if (!this._onWishlistPortalReposition) return;
-    window.removeEventListener("scroll", this._onWishlistPortalReposition, true);
-    window.removeEventListener("resize", this._onWishlistPortalReposition);
-    this._onWishlistPortalReposition = null;
-  }
-
+  // Deliberately rendered in-flow (no position:absolute/fixed overlay):
+  // an overlay either gets clipped/covered by whatever stacking or
+  // containment context Home Assistant's dashboard layout puts around
+  // each card (tried and reverted - see git history), or - if instead
+  // portaled to document.body with position:fixed to escape that - ends
+  // up floating at the wrong spot on iOS Safari while the on-screen
+  // keyboard is open, since iOS shifts the visual viewport rather than
+  // resizing the layout viewport fixed positioning is computed against.
+  // Growing the card in normal flow like any other content sidesteps
+  // both: it always renders exactly where it visually belongs, and
+  // scrolling a focused input into view above the keyboard is standard
+  // browser behavior for in-flow content, not something to fight.
   _renderWishlistSuggestions(results) {
-    if (!results.length) {
-      if (this._wishlistPortalEl) this._wishlistPortalEl.style.display = "none";
-      this._stopWishlistPortalTracking();
-      return;
-    }
-
-    const portal = this._ensureWishlistPortal();
-    const list = portal.shadowRoot.getElementById("list");
-    list.textContent = "";
+    const box = this.shadowRoot.getElementById("wishlist-suggestions");
+    box.textContent = "";
+    box.classList.toggle("is-hidden", !results.length);
     for (const entry of results) {
       const item = document.createElement("button");
       item.type = "button";
@@ -802,12 +705,8 @@ class TeddyCloudCard extends HTMLElement {
       text.textContent = entry.title || entry.series || entry.model;
       item.appendChild(text);
       item.addEventListener("click", () => this._addToWishlist(entry));
-      list.appendChild(item);
+      box.appendChild(item);
     }
-
-    this._positionWishlistPortal();
-    portal.style.display = "block";
-    this._startWishlistPortalTracking();
   }
 
   _renderWishlistItems(items) {
@@ -955,16 +854,17 @@ class TeddyCloudCard extends HTMLElement {
     //
     // Uses composedPath() rather than ev.target: a listener on `document`
     // sees ev.target retargeted to the outermost shadow host it had to
-    // cross to reach here, so for a click anywhere inside this card's (or
-    // the portal's) shadow DOM, ev.target would just be that host element
-    // every time - never the actual search input or suggestion clicked.
+    // cross to reach here, so for a click anywhere inside this card's
+    // shadow DOM, ev.target would just be this card's host element every
+    // time - never the actual search input or suggestion clicked.
     // composedPath() gives the real, un-retargeted chain of nodes instead.
     this._onDocumentClickForWishlist = (ev) => {
       const path = ev.composedPath();
       const searchInput = root.getElementById("wishlist-search");
+      const suggestionsBox = root.getElementById("wishlist-suggestions");
       const withinSearch = !!searchInput && path.includes(searchInput);
-      const withinPortal = !!this._wishlistPortalEl && path.includes(this._wishlistPortalEl);
-      if (!withinSearch && !withinPortal) this._renderWishlistSuggestions([]);
+      const withinSuggestions = !!suggestionsBox && path.includes(suggestionsBox);
+      if (!withinSearch && !withinSuggestions) this._renderWishlistSuggestions([]);
     };
     document.addEventListener("click", this._onDocumentClickForWishlist);
 
@@ -1213,6 +1113,46 @@ class TeddyCloudCard extends HTMLElement {
         color: var(--primary-text-color);
         border: 1px solid var(--divider-color);
         border-radius: 6px;
+      }
+      .wishlist-suggestions {
+        display: flex;
+        flex-direction: column;
+        background: var(--secondary-background-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        max-height: 220px;
+        overflow-y: auto;
+      }
+      .wishlist-suggestion {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 10px;
+        background: none;
+        border: none;
+        font-size: 0.85rem;
+        color: var(--primary-text-color);
+        text-align: left;
+        cursor: pointer;
+      }
+      .wishlist-suggestion:hover {
+        background: var(--divider-color);
+      }
+      .wishlist-suggestion img,
+      .wishlist-suggestion ha-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        object-fit: cover;
+        flex: 0 0 auto;
+        background: var(--card-background-color);
+      }
+      .wishlist-suggestion span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
       .wishlist-items {
         display: flex;
