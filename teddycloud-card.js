@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.3";
+const CARD_VERSION = "1.1.4";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -1172,7 +1172,7 @@ class TeddyCloudCard extends HTMLElement {
         padding: 4px 0;
       }
       .wishlist-item img,
-      .wishlist-item ha-icon {
+      .wishlist-item ha-icon:not(.wishlist-acquired-badge) {
         width: 36px;
         height: 36px;
         border-radius: 6px;

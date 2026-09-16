@@ -2,3 +2,14 @@
 
 # Never commit push credentials
 .git-token-*
+
+# Local-only working notes
+CLAUDE.md
+
+# Scratch test tooling (puppeteer-core driver for the real-Chromium
+# behavioral tests CLAUDE.md's Testing section calls for) - not part of
+# the shipped card, never installed via a build step.
+node_modules/
+package.json
+package-lock.json
+tests/
