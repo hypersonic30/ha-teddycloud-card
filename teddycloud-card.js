@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.1.1";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -559,21 +559,6 @@ class TeddyCloudCard extends HTMLElement {
     return null;
   }
 
-  // Same idea as _resolveDeviceId(), but the wishlist's HTTP endpoints
-  // are keyed by config entry (one teddyCloud server), not by device -
-  // the entity registry entry already carries this too.
-  _resolveEntryId() {
-    const hass = this._hass;
-    if (!hass?.entities) return null;
-    for (const { key } of ENTITY_FIELDS) {
-      const entityId = this._config[key];
-      if (!entityId) continue;
-      const entryId = hass.entities[entityId]?.config_entry_id;
-      if (entryId) return entryId;
-    }
-    return null;
-  }
-
   _showNfcResult(el, kind, text) {
     el.classList.remove("is-hidden");
     el.className = `nfc-result ${kind}`.trim();
@@ -772,10 +757,10 @@ class TeddyCloudCard extends HTMLElement {
   }
 
   async _fetchWishlist() {
-    const entryId = this._resolveEntryId();
-    if (!entryId || !this._hass) return;
+    const deviceId = this._resolveDeviceId();
+    if (!deviceId || !this._hass) return;
     try {
-      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${entryId}`);
+      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${deviceId}`);
       if (!resp.ok) return;
       this._renderWishlistItems(await resp.json());
     } catch (err) {
@@ -785,11 +770,11 @@ class TeddyCloudCard extends HTMLElement {
   }
 
   async _addToWishlist(entry) {
-    const entryId = this._resolveEntryId();
-    if (!entryId || !this._hass || !entry.model) return;
+    const deviceId = this._resolveDeviceId();
+    if (!deviceId || !this._hass || !entry.model) return;
     const searchInput = this.shadowRoot.getElementById("wishlist-search");
     try {
-      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${entryId}`, {
+      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${deviceId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -807,10 +792,10 @@ class TeddyCloudCard extends HTMLElement {
   }
 
   async _removeFromWishlist(model) {
-    const entryId = this._resolveEntryId();
-    if (!entryId || !this._hass) return;
+    const deviceId = this._resolveDeviceId();
+    if (!deviceId || !this._hass) return;
     const resp = await this._hass.fetchWithAuth(
-      `/api/teddycloud/wishlist/${entryId}/${encodeURIComponent(model)}`,
+      `/api/teddycloud/wishlist/${deviceId}/${encodeURIComponent(model)}`,
       { method: "DELETE" }
     );
     if (resp.ok) this._renderWishlistItems(await resp.json());
@@ -833,11 +818,11 @@ class TeddyCloudCard extends HTMLElement {
         return;
       }
       debounceHandle = setTimeout(async () => {
-        const entryId = this._resolveEntryId();
-        if (!entryId || !this._hass) return;
+        const deviceId = this._resolveDeviceId();
+        if (!deviceId || !this._hass) return;
         try {
           const resp = await this._hass.fetchWithAuth(
-            `/api/teddycloud/catalog_search/${entryId}?q=${encodeURIComponent(query)}`
+            `/api/teddycloud/catalog_search/${deviceId}?q=${encodeURIComponent(query)}`
           );
           if (!resp.ok) return;
           // A slower-to-answer, now-stale search must not overwrite
