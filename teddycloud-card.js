@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.0.0";
+const CARD_VERSION = "1.1.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -113,6 +113,7 @@ class TeddyCloudCard extends HTMLElement {
       show_controls: true,
       show_nfc_assign: false,
       show_tonie_library: false,
+      show_wishlist: false,
       ...config,
     };
     this._configEntityIds = ENTITY_FIELDS.map(({ key }) => config[key]).filter(Boolean);
@@ -141,11 +142,20 @@ class TeddyCloudCard extends HTMLElement {
 
   connectedCallback() {
     this._ensureRelativeTimeTimer();
+    this._ensureWishlistTimer();
+    if (this._onDocumentClickForWishlist) {
+      document.addEventListener("click", this._onDocumentClickForWishlist);
+    }
   }
 
   disconnectedCallback() {
     clearInterval(this._relativeTimeInterval);
     this._relativeTimeInterval = null;
+    clearInterval(this._wishlistInterval);
+    this._wishlistInterval = null;
+    if (this._onDocumentClickForWishlist) {
+      document.removeEventListener("click", this._onDocumentClickForWishlist);
+    }
   }
 
   _ensureRelativeTimeTimer() {
@@ -156,6 +166,17 @@ class TeddyCloudCard extends HTMLElement {
     // the full _render(), so it can't interrupt an open dropdown or a
     // switch the user is mid-click on.
     this._relativeTimeInterval = setInterval(() => this._updateRelativeTime(), 30000);
+  }
+
+  _ensureWishlistTimer() {
+    if (this._wishlistInterval || !this._config?.show_wishlist) return;
+    // The wishlist isn't backed by an HA entity, so nothing pushes hass
+    // updates for it - a light poll is the simplest way to reflect a wish
+    // getting found (cross-referenced server-side on every coordinator
+    // refresh) without the user reloading the dashboard. Re-established
+    // on reconnect (e.g. navigating back to this dashboard view), not
+    // just on the shell's one-time initial build.
+    this._wishlistInterval = setInterval(() => this._fetchWishlist(), 60000);
   }
 
   _updateRelativeTime() {
@@ -260,6 +281,26 @@ class TeddyCloudCard extends HTMLElement {
         `
       : "";
 
+    // Search hits teddyCloud's own tonies.json catalog (every officially
+    // released Tonie, not just owned ones) via this integration's own
+    // search endpoint - see the backend's tonies_catalog.py for why that's
+    // a local search over the full catalog rather than teddyCloud's own
+    // (18-result-capped) search API. Picking a suggestion adds it; items
+    // already found in the real library (cross-referenced server-side on
+    // every coordinator refresh) show as acquired instead of needing to be
+    // removed manually.
+    const wishlistHtml = this._config.show_wishlist
+      ? `
+          <div class="wishlist">
+            <div class="wishlist-search-row">
+              <input type="search" id="wishlist-search" class="wishlist-search" placeholder="Search Tonies to wish for…" autocomplete="off" />
+              <div class="wishlist-suggestions is-hidden" id="wishlist-suggestions"></div>
+            </div>
+            <div class="wishlist-items" id="wishlist-items"></div>
+          </div>
+        `
+      : "";
+
     // Every row that can appear/disappear at runtime (not just at config
     // time) is always present in the shell and toggled via .is-hidden —
     // the shell itself is only ever built once per setConfig(), so nothing
@@ -295,12 +336,14 @@ class TeddyCloudCard extends HTMLElement {
         ${controlsHtml}
         ${nfcAssignHtml}
         ${tonieLibraryHtml}
+        ${wishlistHtml}
       </ha-card>
     `;
 
     this._wireControls();
     this._wireNfcAssign();
     this._wireTonieLibrary();
+    this._wireWishlist();
   }
 
   _updateContent() {
@@ -516,6 +559,21 @@ class TeddyCloudCard extends HTMLElement {
     return null;
   }
 
+  // Same idea as _resolveDeviceId(), but the wishlist's HTTP endpoints
+  // are keyed by config entry (one teddyCloud server), not by device -
+  // the entity registry entry already carries this too.
+  _resolveEntryId() {
+    const hass = this._hass;
+    if (!hass?.entities) return null;
+    for (const { key } of ENTITY_FIELDS) {
+      const entityId = this._config[key];
+      if (!entityId) continue;
+      const entryId = hass.entities[entityId]?.config_entry_id;
+      if (entryId) return entryId;
+    }
+    return null;
+  }
+
   _showNfcResult(el, kind, text) {
     el.classList.remove("is-hidden");
     el.className = `nfc-result ${kind}`.trim();
@@ -627,6 +685,187 @@ class TeddyCloudCard extends HTMLElement {
       if (!playerUrl) return;
       window.open(playerUrl, "_blank");
     });
+  }
+
+  _renderWishlistSuggestions(results) {
+    const box = this.shadowRoot.getElementById("wishlist-suggestions");
+    box.textContent = "";
+    box.classList.toggle("is-hidden", !results.length);
+    for (const entry of results) {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = "wishlist-suggestion";
+      if (entry.picture) {
+        const img = document.createElement("img");
+        img.src = entry.picture;
+        img.alt = "";
+        img.loading = "lazy";
+        item.appendChild(img);
+      } else {
+        const icon = document.createElement("ha-icon");
+        icon.setAttribute("icon", "mdi:teddy-bear");
+        item.appendChild(icon);
+      }
+      const text = document.createElement("span");
+      text.textContent = entry.title || entry.series || entry.model;
+      item.appendChild(text);
+      item.addEventListener("click", () => this._addToWishlist(entry));
+      box.appendChild(item);
+    }
+  }
+
+  _renderWishlistItems(items) {
+    const root = this.shadowRoot;
+    const container = root.getElementById("wishlist-items");
+    container.textContent = "";
+
+    if (!items.length) {
+      const empty = document.createElement("div");
+      empty.className = "wishlist-empty";
+      empty.textContent = "No wishes yet — search above to add one.";
+      container.appendChild(empty);
+      return;
+    }
+
+    // Not-yet-found wishes first, found ones after — the list you still
+    // need to look for is the one worth seeing without scrolling.
+    const sorted = [...items].sort((a, b) => Number(a.acquired) - Number(b.acquired));
+    for (const item of sorted) {
+      const row = document.createElement("div");
+      row.className = `wishlist-item${item.acquired ? " is-acquired" : ""}`;
+
+      if (item.picture) {
+        const img = document.createElement("img");
+        img.src = item.picture;
+        img.alt = "";
+        img.loading = "lazy";
+        row.appendChild(img);
+      } else {
+        const icon = document.createElement("ha-icon");
+        icon.setAttribute("icon", "mdi:teddy-bear");
+        row.appendChild(icon);
+      }
+
+      const text = document.createElement("span");
+      text.className = "wishlist-item-title";
+      text.textContent = item.title;
+      row.appendChild(text);
+
+      if (item.acquired) {
+        const badge = document.createElement("ha-icon");
+        badge.className = "wishlist-acquired-badge";
+        badge.setAttribute("icon", "mdi:check-circle");
+        badge.title = "Found in your library";
+        row.appendChild(badge);
+      }
+
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "wishlist-remove";
+      removeBtn.setAttribute("aria-label", "Remove from wishlist");
+      removeBtn.textContent = "×";
+      removeBtn.addEventListener("click", () => this._removeFromWishlist(item.model));
+      row.appendChild(removeBtn);
+
+      container.appendChild(row);
+    }
+  }
+
+  async _fetchWishlist() {
+    const entryId = this._resolveEntryId();
+    if (!entryId || !this._hass) return;
+    try {
+      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${entryId}`);
+      if (!resp.ok) return;
+      this._renderWishlistItems(await resp.json());
+    } catch (err) {
+      // A transient fetch failure just leaves the last-known list on
+      // screen rather than clearing it - nothing actionable for the user.
+    }
+  }
+
+  async _addToWishlist(entry) {
+    const entryId = this._resolveEntryId();
+    if (!entryId || !this._hass || !entry.model) return;
+    const searchInput = this.shadowRoot.getElementById("wishlist-search");
+    try {
+      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${entryId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: entry.model,
+          title: entry.title || entry.series || entry.model,
+          series: entry.series || null,
+          picture: entry.picture || null,
+        }),
+      });
+      if (resp.ok) this._renderWishlistItems(await resp.json());
+    } finally {
+      searchInput.value = "";
+      this._renderWishlistSuggestions([]);
+    }
+  }
+
+  async _removeFromWishlist(model) {
+    const entryId = this._resolveEntryId();
+    if (!entryId || !this._hass) return;
+    const resp = await this._hass.fetchWithAuth(
+      `/api/teddycloud/wishlist/${entryId}/${encodeURIComponent(model)}`,
+      { method: "DELETE" }
+    );
+    if (resp.ok) this._renderWishlistItems(await resp.json());
+  }
+
+  _wireWishlist() {
+    if (!this._config.show_wishlist) return;
+    const root = this.shadowRoot;
+    const searchInput = root.getElementById("wishlist-search");
+
+    // 300ms debounce matches teddyCloud's own web UI's search-as-you-type
+    // for the same catalog, so results feel similarly responsive without
+    // firing a search request on every single keystroke.
+    let debounceHandle = null;
+    searchInput.addEventListener("input", () => {
+      clearTimeout(debounceHandle);
+      const query = searchInput.value.trim();
+      if (!query) {
+        this._renderWishlistSuggestions([]);
+        return;
+      }
+      debounceHandle = setTimeout(async () => {
+        const entryId = this._resolveEntryId();
+        if (!entryId || !this._hass) return;
+        try {
+          const resp = await this._hass.fetchWithAuth(
+            `/api/teddycloud/catalog_search/${entryId}?q=${encodeURIComponent(query)}`
+          );
+          if (!resp.ok) return;
+          // A slower-to-answer, now-stale search must not overwrite
+          // suggestions from a query typed after it.
+          if (searchInput.value.trim() !== query) return;
+          this._renderWishlistSuggestions(await resp.json());
+        } catch (err) {
+          // Leave whatever suggestions (if any) are already showing.
+        }
+      }, 300);
+    });
+
+    // Attached to `document` (needs to see clicks anywhere on the page to
+    // know when to close the dropdown), so - unlike listeners attached to
+    // this card's own shadow root, which get garbage-collected with it -
+    // this one must be explicitly removed on disconnect or it outlives
+    // the card entirely. Stored so connectedCallback()/disconnectedCallback()
+    // can re-add/remove the same reference.
+    this._onDocumentClickForWishlist = (ev) => {
+      if (!this.contains(ev.target)) return;
+      const withinSearch = root.getElementById("wishlist-search")?.contains(ev.target);
+      const withinSuggestions = root.getElementById("wishlist-suggestions")?.contains(ev.target);
+      if (!withinSearch && !withinSuggestions) this._renderWishlistSuggestions([]);
+    };
+    document.addEventListener("click", this._onDocumentClickForWishlist);
+
+    this._fetchWishlist();
+    this._ensureWishlistTimer();
   }
 
   _styles() {
@@ -854,6 +1093,127 @@ class TeddyCloudCard extends HTMLElement {
         text-overflow: ellipsis;
         white-space: nowrap;
       }
+      .wishlist {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        border-top: 1px solid var(--divider-color);
+        padding-top: 12px;
+      }
+      .wishlist-search-row {
+        position: relative;
+      }
+      .wishlist-search {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 10px;
+        font-size: 0.85rem;
+        background: var(--card-background-color);
+        color: var(--primary-text-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+      }
+      .wishlist-suggestions {
+        position: absolute;
+        z-index: 1;
+        left: 0;
+        right: 0;
+        top: calc(100% + 4px);
+        background: var(--card-background-color);
+        border: 1px solid var(--divider-color);
+        border-radius: 6px;
+        max-height: 220px;
+        overflow-y: auto;
+        box-shadow: var(--ha-card-box-shadow, 0 2px 6px rgba(0, 0, 0, 0.3));
+      }
+      .wishlist-suggestion {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 10px;
+        background: none;
+        border: none;
+        font-size: 0.85rem;
+        color: var(--primary-text-color);
+        text-align: left;
+        cursor: pointer;
+      }
+      .wishlist-suggestion:hover {
+        background: var(--secondary-background-color);
+      }
+      .wishlist-suggestion img,
+      .wishlist-suggestion ha-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        object-fit: cover;
+        flex: 0 0 auto;
+        background: var(--secondary-background-color);
+      }
+      .wishlist-suggestion span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .wishlist-items {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .wishlist-empty {
+        font-size: 0.85rem;
+        color: var(--secondary-text-color);
+      }
+      .wishlist-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 0;
+      }
+      .wishlist-item img,
+      .wishlist-item ha-icon {
+        width: 36px;
+        height: 36px;
+        border-radius: 6px;
+        object-fit: cover;
+        flex: 0 0 auto;
+        background: var(--secondary-background-color);
+      }
+      .wishlist-item-title {
+        flex: 1;
+        min-width: 0;
+        font-size: 0.85rem;
+        color: var(--primary-text-color);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .wishlist-item.is-acquired .wishlist-item-title {
+        color: var(--secondary-text-color);
+        text-decoration: line-through;
+      }
+      .wishlist-acquired-badge {
+        --mdc-icon-size: 18px;
+        color: #4caf50;
+        flex: 0 0 auto;
+      }
+      .wishlist-remove {
+        flex: 0 0 auto;
+        background: none;
+        border: none;
+        font-size: 1.1rem;
+        line-height: 1;
+        color: var(--secondary-text-color);
+        cursor: pointer;
+        padding: 2px 6px;
+      }
+      .wishlist-remove:hover {
+        color: var(--error-color, #db4437);
+      }
     `;
   }
 }
@@ -864,6 +1224,7 @@ class TeddyCloudCardEditor extends HTMLElement {
       show_controls: true,
       show_nfc_assign: false,
       show_tonie_library: false,
+      show_wishlist: false,
       ...config,
     };
     this._render();
@@ -912,6 +1273,11 @@ class TeddyCloudCardEditor extends HTMLElement {
           <ha-switch id="show_tonie_library" ${this._config.show_tonie_library ? "checked" : ""}></ha-switch>
         </ha-formfield>
       </div>
+      <div class="row">
+        <ha-formfield label="Show wishlist">
+          <ha-switch id="show_wishlist" ${this._config.show_wishlist ? "checked" : ""}></ha-switch>
+        </ha-formfield>
+      </div>
       ${ENTITY_FIELDS.map(({ key }) => `<div class="row" data-field="${key}"></div>`).join("")}
     `;
 
@@ -937,6 +1303,12 @@ class TeddyCloudCardEditor extends HTMLElement {
     const showTonieLibrary = this.shadowRoot.getElementById("show_tonie_library");
     showTonieLibrary.addEventListener("change", (ev) => {
       this._config = { ...this._config, show_tonie_library: ev.target.checked };
+      this._emitChange();
+    });
+
+    const showWishlist = this.shadowRoot.getElementById("show_wishlist");
+    showWishlist.addEventListener("change", (ev) => {
+      this._config = { ...this._config, show_wishlist: ev.target.checked };
       this._emitChange();
     });
 
