@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.8";
+const CARD_VERSION = "1.2.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -331,6 +331,7 @@ class TeddyCloudCard extends HTMLElement {
               Clear found (<span id="wishlist-clear-count">0</span>)
             </button>
             <div class="nfc-result is-hidden" id="wishlist-result"></div>
+            <a href="#" id="wishlist-backup-link" class="wishlist-backup-link is-hidden" target="_blank" rel="noopener noreferrer">View backup repo on GitHub ↗</a>
           </div>
         `
       : "";
@@ -842,6 +843,31 @@ class TeddyCloudCard extends HTMLElement {
     }
   }
 
+  // The configured GitHub backup repo doesn't change without a
+  // reconfigure (which reloads the whole dashboard anyway), so this is
+  // fetched once when the wishlist is wired up, not on every 60s poll
+  // like _fetchWishlist() - a manual "what's actually in the repo" link
+  // for cross-checking against the backend's own matching-miss logging.
+  async _fetchWishlistBackupLink() {
+    const deviceId = this._resolveDeviceId();
+    const link = this.shadowRoot.getElementById("wishlist-backup-link");
+    if (!deviceId || !this._hass || !link) return;
+    try {
+      const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${deviceId}/backup_source`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.configured && data.url) {
+        link.href = data.url;
+        link.classList.remove("is-hidden");
+      } else {
+        link.classList.add("is-hidden");
+      }
+    } catch (err) {
+      // No GitHub repo configured, or a transient failure - either way,
+      // just leave the link hidden rather than showing a dead one.
+    }
+  }
+
   async _addToWishlist(entry) {
     const deviceId = this._resolveDeviceId();
     if (!deviceId || !this._hass || !entry.model) return;
@@ -1021,6 +1047,7 @@ class TeddyCloudCard extends HTMLElement {
     document.addEventListener("click", this._onDocumentClickForWishlist);
 
     this._fetchWishlist();
+    this._fetchWishlistBackupLink();
     this._ensureWishlistTimer();
   }
 
@@ -1384,6 +1411,14 @@ class TeddyCloudCard extends HTMLElement {
         opacity: 0.5;
         cursor: default;
         text-decoration: none;
+      }
+      .wishlist-backup-link {
+        align-self: flex-end;
+        font-size: 0.78rem;
+        color: var(--secondary-text-color);
+      }
+      .wishlist-backup-link:hover {
+        color: var(--primary-color, #03a9f4);
       }
     `;
   }
