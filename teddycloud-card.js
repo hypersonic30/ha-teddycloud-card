@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.3.0";
+const CARD_VERSION = "1.3.1";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -1464,21 +1464,20 @@ class TeddyCloudCard extends HTMLElement {
       }
       .wishlist-check-backups {
         align-self: flex-start;
-        background: none;
+        background: var(--primary-color);
+        color: var(--text-primary-color, #fff);
         border: none;
-        font-size: 0.78rem;
-        color: var(--secondary-text-color);
-        text-decoration: underline;
+        border-radius: 6px;
+        padding: 6px 14px;
+        font-size: 0.85rem;
         cursor: pointer;
-        padding: 2px;
       }
       .wishlist-check-backups:hover {
-        color: var(--primary-color, #03a9f4);
+        opacity: 0.9;
       }
       .wishlist-check-backups:disabled {
-        opacity: 0.5;
+        opacity: 0.6;
         cursor: default;
-        text-decoration: none;
       }
     `;
   }
