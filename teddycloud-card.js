@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.5";
+const CARD_VERSION = "1.1.6";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -298,6 +298,7 @@ class TeddyCloudCard extends HTMLElement {
             <button type="button" id="wishlist-clear-acquired" class="wishlist-clear-acquired is-hidden">
               Clear found (<span id="wishlist-clear-count">0</span>)
             </button>
+            <div class="nfc-result is-hidden" id="wishlist-result"></div>
           </div>
         `
       : "";
@@ -720,6 +721,14 @@ class TeddyCloudCard extends HTMLElement {
     const container = root.getElementById("wishlist-items");
     container.textContent = "";
 
+    // Any fresh render reflects current server truth - including the
+    // periodic 60s poll (_fetchWishlist), which can land after a request
+    // that itself reported failure (e.g. the response was lost but the
+    // change actually went through) and self-correct the list. Clear a
+    // stale error rather than leaving it up once the data's already
+    // caught up; a caller showing a *new* error does so after this call.
+    root.getElementById("wishlist-result")?.classList.add("is-hidden");
+
     const acquiredCount = items.filter((item) => item.acquired).length;
     const clearBtn = root.getElementById("wishlist-clear-acquired");
     if (clearBtn) {
@@ -797,6 +806,7 @@ class TeddyCloudCard extends HTMLElement {
     const deviceId = this._resolveDeviceId();
     if (!deviceId || !this._hass || !entry.model) return;
     const searchInput = this.shadowRoot.getElementById("wishlist-search");
+    const resultEl = this.shadowRoot.getElementById("wishlist-result");
     try {
       const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${deviceId}`, {
         method: "POST",
@@ -808,7 +818,18 @@ class TeddyCloudCard extends HTMLElement {
           picture: entry.picture || null,
         }),
       });
-      if (resp.ok) this._renderWishlistItems(await resp.json());
+      if (resp.ok) {
+        this._renderWishlistItems(await resp.json());
+      } else {
+        this._showNfcResult(resultEl, "err", "Could not add that Tonie to the wishlist — try again.");
+      }
+    } catch (err) {
+      // Unlike _fetchWishlist()'s poll (silently keeping the last-known
+      // list is fine there), a failure right after a user action needs to
+      // be visible - a network error here used to just vanish (unhandled
+      // rejection), leaving the search box cleared with no sign anything
+      // went wrong.
+      this._showNfcResult(resultEl, "err", "Could not reach Home Assistant — check your connection and try again.");
     } finally {
       searchInput.value = "";
       this._renderWishlistSuggestions([]);
@@ -818,11 +839,24 @@ class TeddyCloudCard extends HTMLElement {
   async _removeFromWishlist(model) {
     const deviceId = this._resolveDeviceId();
     if (!deviceId || !this._hass) return;
-    const resp = await this._hass.fetchWithAuth(
-      `/api/teddycloud/wishlist/${deviceId}/${encodeURIComponent(model)}`,
-      { method: "DELETE" }
-    );
-    if (resp.ok) this._renderWishlistItems(await resp.json());
+    const resultEl = this.shadowRoot.getElementById("wishlist-result");
+    try {
+      const resp = await this._hass.fetchWithAuth(
+        `/api/teddycloud/wishlist/${deviceId}/${encodeURIComponent(model)}`,
+        { method: "DELETE" }
+      );
+      if (resp.ok) {
+        this._renderWishlistItems(await resp.json());
+      } else {
+        this._showNfcResult(resultEl, "err", "Could not remove that item — try again.");
+      }
+    } catch (err) {
+      // Same reasoning as _addToWishlist(): make a failed request visible
+      // instead of letting it disappear as an unhandled rejection - a
+      // reported symptom of this was "clicking × just highlights the row,
+      // nothing happens," with no indication anything had failed.
+      this._showNfcResult(resultEl, "err", "Could not reach Home Assistant — check your connection and try again.");
+    }
   }
 
   // Reported friction: acquired items sort to the bottom of the list (see
@@ -838,19 +872,35 @@ class TeddyCloudCard extends HTMLElement {
     const acquired = (this._wishlistItems || []).filter((item) => item.acquired);
     if (!acquired.length) return;
 
+    const resultEl = this.shadowRoot.getElementById("wishlist-result");
     let latest = this._wishlistItems;
+    let failures = 0;
     for (const item of acquired) {
       try {
         const resp = await this._hass.fetchWithAuth(
           `/api/teddycloud/wishlist/${deviceId}/${encodeURIComponent(item.model)}`,
           { method: "DELETE" }
         );
-        if (resp.ok) latest = await resp.json();
+        if (resp.ok) {
+          latest = await resp.json();
+        } else {
+          failures++;
+        }
       } catch (err) {
-        // Best-effort - keep clearing the rest even if one request fails.
+        // Keep clearing the rest of the batch even if one request fails
+        // (e.g. a connection drop mid-batch) - report the shortfall below
+        // rather than abandoning whatever already succeeded.
+        failures++;
       }
     }
     this._renderWishlistItems(latest);
+    if (failures > 0) {
+      this._showNfcResult(
+        resultEl,
+        "err",
+        `Removed ${acquired.length - failures} of ${acquired.length} — check your connection and try again for the rest.`
+      );
+    }
   }
 
   _wireWishlist() {
@@ -903,6 +953,13 @@ class TeddyCloudCard extends HTMLElement {
     // shadow DOM, ev.target would just be this card's host element every
     // time - never the actual search input or suggestion clicked.
     // composedPath() gives the real, un-retargeted chain of nodes instead.
+    // _wireWishlist() runs again on every setConfig() (_buildShell() reruns
+    // whenever the dashboard reassigns this card's config, e.g. editing the
+    // dashboard while it stays connected) - remove any previous listener
+    // first, or each rerun adds another one on top instead of replacing it.
+    if (this._onDocumentClickForWishlist) {
+      document.removeEventListener("click", this._onDocumentClickForWishlist);
+    }
     this._onDocumentClickForWishlist = (ev) => {
       const path = ev.composedPath();
       const searchInput = root.getElementById("wishlist-search");
