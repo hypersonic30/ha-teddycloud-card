@@ -6,10 +6,16 @@
 # Local-only working notes
 CLAUDE.md
 
-# Scratch test tooling (puppeteer-core driver for the real-Chromium
-# behavioral tests CLAUDE.md's Testing section calls for) - not part of
-# the shipped card, never installed via a build step.
+# Test tooling (puppeteer-core driver for the real-Chromium behavioral
+# tests CLAUDE.md's Testing section calls for) - not part of the shipped
+# card itself, never installed via a build step, but tracked so CI
+# (.github/workflows/tests.yml) can install and run it.
 node_modules/
-package.json
-package-lock.json
-tests/
+
+# One-off scratch tooling used to export the HACS brand icon SVG
+# concepts to PNG - not a test, and the real icon lives in the
+# integration repo's custom_components/teddycloud/brand/.
+tests/export-icon.mjs
+tests/icon-export.html
+tests/icon.png
+tests/icon@2x.png

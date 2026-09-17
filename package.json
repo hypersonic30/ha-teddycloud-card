@@ -1,0 +1,23 @@
+{
+  "name": "ha-teddycloud-card",
+  "version": "1.0.0",
+  "description": "[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration) [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2024.8%2B-brightgreen.svg)](https://www.home-assistant.io) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)",
+  "main": "teddycloud-card.js",
+  "scripts": {
+    "test": "for f in tests/*.test.mjs; do node \"$f\" || exit 1; done"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hypersonic30/ha-teddycloud-card.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/hypersonic30/ha-teddycloud-card/issues"
+  },
+  "homepage": "https://github.com/hypersonic30/ha-teddycloud-card#readme",
+  "devDependencies": {
+    "puppeteer-core": "^25.11.0"
+  }
+}
