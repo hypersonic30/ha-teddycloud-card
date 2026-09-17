@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.2.1";
+const CARD_VERSION = "1.3.0";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -331,6 +331,7 @@ class TeddyCloudCard extends HTMLElement {
               Clear found (<span id="wishlist-clear-count">0</span>)
             </button>
             <div class="nfc-result is-hidden" id="wishlist-result"></div>
+            <button type="button" id="wishlist-check-backups" class="wishlist-check-backups is-hidden">Check backups now</button>
             <a href="#" id="wishlist-backup-link" class="wishlist-backup-link is-hidden" target="_blank" rel="noopener noreferrer">View backup repo on GitHub ↗</a>
           </div>
         `
@@ -848,23 +849,56 @@ class TeddyCloudCard extends HTMLElement {
   // fetched once when the wishlist is wired up, not on every 60s poll
   // like _fetchWishlist() - a manual "what's actually in the repo" link
   // for cross-checking against the backend's own matching-miss logging.
+  // Also gates the "Check backups now" button's visibility on the same
+  // response, since both only make sense with a repo actually configured.
   async _fetchWishlistBackupLink() {
     const deviceId = this._resolveDeviceId();
     const link = this.shadowRoot.getElementById("wishlist-backup-link");
+    const checkBtn = this.shadowRoot.getElementById("wishlist-check-backups");
     if (!deviceId || !this._hass || !link) return;
     try {
       const resp = await this._hass.fetchWithAuth(`/api/teddycloud/wishlist/${deviceId}/backup_source`);
       if (!resp.ok) return;
       const data = await resp.json();
-      if (data.configured && data.url) {
-        link.href = data.url;
-        link.classList.remove("is-hidden");
-      } else {
-        link.classList.add("is-hidden");
-      }
+      const configured = !!(data.configured && data.url);
+      link.classList.toggle("is-hidden", !configured);
+      checkBtn?.classList.toggle("is-hidden", !configured);
+      if (configured) link.href = data.url;
     } catch (err) {
       // No GitHub repo configured, or a transient failure - either way,
-      // just leave the link hidden rather than showing a dead one.
+      // just leave the link/button hidden rather than showing a dead one.
+    }
+  }
+
+  // Triggers an immediate check instead of waiting for the backend's own
+  // periodic one (up to CONF_GITHUB_CHECK_INTERVAL minutes apart) -
+  // useful right after adding a wishlist item or pushing a new backup
+  // file, and for the exact kind of debugging this session needed a lot
+  // of: change something, then not want to wait to see if it worked.
+  async _checkBackupsNow() {
+    const deviceId = this._resolveDeviceId();
+    if (!deviceId || !this._hass) return;
+    const resultEl = this.shadowRoot.getElementById("wishlist-result");
+    try {
+      const resp = await this._hass.fetchWithAuth(
+        `/api/teddycloud/wishlist/${deviceId}/import_from_backups`,
+        { method: "POST" }
+      );
+      if (!resp.ok) {
+        this._showNfcResult(resultEl, "err", "Could not check backups — try again.");
+        return;
+      }
+      const data = await resp.json();
+      await this._fetchWishlist();
+      this._showNfcResult(
+        resultEl,
+        "ok",
+        data.attempted > 0
+          ? `Checked backups — imported ${data.attempted}.`
+          : "Checked backups — nothing new found."
+      );
+    } catch (err) {
+      this._showNfcResult(resultEl, "err", "Could not reach Home Assistant — check your connection and try again.");
     }
   }
 
@@ -1013,6 +1047,14 @@ class TeddyCloudCard extends HTMLElement {
       clearAcquiredBtn.disabled = true;
       this._removeAllAcquired().finally(() => {
         clearAcquiredBtn.disabled = false;
+      });
+    });
+
+    const checkBackupsBtn = root.getElementById("wishlist-check-backups");
+    checkBackupsBtn?.addEventListener("click", () => {
+      checkBackupsBtn.disabled = true;
+      this._checkBackupsNow().finally(() => {
+        checkBackupsBtn.disabled = false;
       });
     });
 
@@ -1419,6 +1461,24 @@ class TeddyCloudCard extends HTMLElement {
       }
       .wishlist-backup-link:hover {
         color: var(--primary-color, #03a9f4);
+      }
+      .wishlist-check-backups {
+        align-self: flex-start;
+        background: none;
+        border: none;
+        font-size: 0.78rem;
+        color: var(--secondary-text-color);
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 2px;
+      }
+      .wishlist-check-backups:hover {
+        color: var(--primary-color, #03a9f4);
+      }
+      .wishlist-check-backups:disabled {
+        opacity: 0.5;
+        cursor: default;
+        text-decoration: none;
       }
     `;
   }
