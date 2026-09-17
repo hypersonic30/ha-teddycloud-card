@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.6";
+const CARD_VERSION = "1.1.7";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -782,7 +782,15 @@ class TeddyCloudCard extends HTMLElement {
       removeBtn.className = "wishlist-remove";
       removeBtn.setAttribute("aria-label", "Remove from wishlist");
       removeBtn.textContent = "×";
-      removeBtn.addEventListener("click", () => this._removeFromWishlist(item.model));
+      // Disabled immediately so a double-tap (easy on a touchscreen, and
+      // exactly what a user unsure whether their first tap "took" is
+      // likely to do) can't fire a second overlapping request for the
+      // same item - re-enabled on failure so a genuine retry still works;
+      // on success the whole row is gone after the re-render anyway.
+      removeBtn.addEventListener("click", () => {
+        removeBtn.disabled = true;
+        this._removeFromWishlist(item.model, removeBtn);
+      });
       row.appendChild(removeBtn);
 
       container.appendChild(row);
@@ -836,7 +844,7 @@ class TeddyCloudCard extends HTMLElement {
     }
   }
 
-  async _removeFromWishlist(model) {
+  async _removeFromWishlist(model, button) {
     const deviceId = this._resolveDeviceId();
     if (!deviceId || !this._hass) return;
     const resultEl = this.shadowRoot.getElementById("wishlist-result");
@@ -849,6 +857,7 @@ class TeddyCloudCard extends HTMLElement {
         this._renderWishlistItems(await resp.json());
       } else {
         this._showNfcResult(resultEl, "err", "Could not remove that item — try again.");
+        if (button) button.disabled = false;
       }
     } catch (err) {
       // Same reasoning as _addToWishlist(): make a failed request visible
@@ -856,6 +865,7 @@ class TeddyCloudCard extends HTMLElement {
       // reported symptom of this was "clicking × just highlights the row,
       // nothing happens," with no indication anything had failed.
       this._showNfcResult(resultEl, "err", "Could not reach Home Assistant — check your connection and try again.");
+      if (button) button.disabled = false;
     }
   }
 
@@ -938,7 +948,15 @@ class TeddyCloudCard extends HTMLElement {
     });
 
     const clearAcquiredBtn = root.getElementById("wishlist-clear-acquired");
-    clearAcquiredBtn?.addEventListener("click", () => this._removeAllAcquired());
+    clearAcquiredBtn?.addEventListener("click", () => {
+      // Lives in the static shell (built once), not rebuilt per-render
+      // like the item rows - a re-render doesn't reset .disabled on its
+      // own, so this must explicitly re-enable it once the batch settles.
+      clearAcquiredBtn.disabled = true;
+      this._removeAllAcquired().finally(() => {
+        clearAcquiredBtn.disabled = false;
+      });
+    });
 
     // Attached to `document` (needs to see clicks anywhere on the page to
     // know when to close the dropdown), so - unlike listeners attached to
@@ -1313,6 +1331,10 @@ class TeddyCloudCard extends HTMLElement {
       .wishlist-remove:hover {
         color: var(--error-color, #db4437);
       }
+      .wishlist-remove:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
       .wishlist-clear-acquired {
         align-self: flex-end;
         background: none;
@@ -1325,6 +1347,11 @@ class TeddyCloudCard extends HTMLElement {
       }
       .wishlist-clear-acquired:hover {
         color: var(--primary-color, #03a9f4);
+      }
+      .wishlist-clear-acquired:disabled {
+        opacity: 0.5;
+        cursor: default;
+        text-decoration: none;
       }
     `;
   }
