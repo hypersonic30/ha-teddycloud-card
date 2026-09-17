@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.4";
+const CARD_VERSION = "1.1.5";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -295,6 +295,9 @@ class TeddyCloudCard extends HTMLElement {
             <input type="search" id="wishlist-search" class="wishlist-search" placeholder="Search Tonies to wish for…" autocomplete="off" />
             <div class="wishlist-suggestions is-hidden" id="wishlist-suggestions"></div>
             <div class="wishlist-items" id="wishlist-items"></div>
+            <button type="button" id="wishlist-clear-acquired" class="wishlist-clear-acquired is-hidden">
+              Clear found (<span id="wishlist-clear-count">0</span>)
+            </button>
           </div>
         `
       : "";
@@ -711,8 +714,19 @@ class TeddyCloudCard extends HTMLElement {
 
   _renderWishlistItems(items) {
     const root = this.shadowRoot;
+    // Kept so _removeAllAcquired() can act on "whatever's currently
+    // acquired" without a fresh fetch or re-deriving it from the DOM.
+    this._wishlistItems = items;
     const container = root.getElementById("wishlist-items");
     container.textContent = "";
+
+    const acquiredCount = items.filter((item) => item.acquired).length;
+    const clearBtn = root.getElementById("wishlist-clear-acquired");
+    if (clearBtn) {
+      clearBtn.classList.toggle("is-hidden", acquiredCount === 0);
+      const countEl = root.getElementById("wishlist-clear-count");
+      if (countEl) countEl.textContent = String(acquiredCount);
+    }
 
     if (!items.length) {
       const empty = document.createElement("div");
@@ -811,6 +825,34 @@ class TeddyCloudCard extends HTMLElement {
     if (resp.ok) this._renderWishlistItems(await resp.json());
   }
 
+  // Reported friction: acquired items sort to the bottom of the list (see
+  // _renderWishlistItems's comment), so removing one re-sorts and shifts
+  // every row after it - clicking several acquired items' own "x" buttons
+  // in a row means each click lands on whatever item slid into that spot
+  // next, not the one the user was actually aiming at. One button that
+  // clears all of them at once sidesteps that entirely, rather than
+  // trying to keep rows from moving under a still-open list.
+  async _removeAllAcquired() {
+    const deviceId = this._resolveDeviceId();
+    if (!deviceId || !this._hass) return;
+    const acquired = (this._wishlistItems || []).filter((item) => item.acquired);
+    if (!acquired.length) return;
+
+    let latest = this._wishlistItems;
+    for (const item of acquired) {
+      try {
+        const resp = await this._hass.fetchWithAuth(
+          `/api/teddycloud/wishlist/${deviceId}/${encodeURIComponent(item.model)}`,
+          { method: "DELETE" }
+        );
+        if (resp.ok) latest = await resp.json();
+      } catch (err) {
+        // Best-effort - keep clearing the rest even if one request fails.
+      }
+    }
+    this._renderWishlistItems(latest);
+  }
+
   _wireWishlist() {
     if (!this._config.show_wishlist) return;
     const root = this.shadowRoot;
@@ -844,6 +886,9 @@ class TeddyCloudCard extends HTMLElement {
         }
       }, 300);
     });
+
+    const clearAcquiredBtn = root.getElementById("wishlist-clear-acquired");
+    clearAcquiredBtn?.addEventListener("click", () => this._removeAllAcquired());
 
     // Attached to `document` (needs to see clicks anywhere on the page to
     // know when to close the dropdown), so - unlike listeners attached to
@@ -1210,6 +1255,19 @@ class TeddyCloudCard extends HTMLElement {
       }
       .wishlist-remove:hover {
         color: var(--error-color, #db4437);
+      }
+      .wishlist-clear-acquired {
+        align-self: flex-end;
+        background: none;
+        border: none;
+        font-size: 0.78rem;
+        color: var(--secondary-text-color);
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 2px;
+      }
+      .wishlist-clear-acquired:hover {
+        color: var(--primary-color, #03a9f4);
       }
     `;
   }
