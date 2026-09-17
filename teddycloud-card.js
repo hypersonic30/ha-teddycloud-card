@@ -22,7 +22,7 @@
 
 const CARD_TAG = "teddycloud-card";
 const EDITOR_TAG = "teddycloud-card-editor";
-const CARD_VERSION = "1.1.7";
+const CARD_VERSION = "1.1.8";
 
 const ENTITY_FIELDS = [
   { key: "entity_online", label: "Online (binary_sensor)", domain: "binary_sensor" },
@@ -146,6 +146,9 @@ class TeddyCloudCard extends HTMLElement {
     if (this._onDocumentClickForWishlist) {
       document.addEventListener("click", this._onDocumentClickForWishlist);
     }
+    if (this._onVisibilityChangeForWishlist) {
+      document.addEventListener("visibilitychange", this._onVisibilityChangeForWishlist);
+    }
   }
 
   disconnectedCallback() {
@@ -155,6 +158,9 @@ class TeddyCloudCard extends HTMLElement {
     this._wishlistInterval = null;
     if (this._onDocumentClickForWishlist) {
       document.removeEventListener("click", this._onDocumentClickForWishlist);
+    }
+    if (this._onVisibilityChangeForWishlist) {
+      document.removeEventListener("visibilitychange", this._onVisibilityChangeForWishlist);
     }
   }
 
@@ -176,7 +182,33 @@ class TeddyCloudCard extends HTMLElement {
     // refresh) without the user reloading the dashboard. Re-established
     // on reconnect (e.g. navigating back to this dashboard view), not
     // just on the shell's one-time initial build.
-    this._wishlistInterval = setInterval(() => this._fetchWishlist(), 60000);
+    //
+    // Skipped while the tab/app is backgrounded (document.hidden): a real
+    // report traced a device repeatedly locking itself out of Home
+    // Assistant back to http.ban logging several of these polls as
+    // invalid-auth and banning the IP - a backgrounded/locked phone is
+    // exactly when a VPN tunnel is most likely mid-reconnect with a
+    // stale token, and this poll fires on its own every 60s regardless of
+    // whether the user is even looking at the card. Caught back up by
+    // _onVisibilityChangeForWishlist's immediate refresh on return
+    // instead, rather than polling blind through that whole window.
+    this._wishlistInterval = setInterval(() => {
+      if (document.visibilityState === "visible") this._fetchWishlist();
+    }, 60000);
+
+    // Defined and attached here (like _onDocumentClickForWishlist in
+    // _wireWishlist()) rather than only in connectedCallback() - this
+    // whole method is guarded by the _wishlistInterval check above, so it
+    // only ever runs once regardless of how many times setConfig() reruns
+    // _buildShell()/_wireWishlist(), which keeps this listener from
+    // accumulating duplicates the same way that one used to.
+    // connectedCallback() re-attaches this same reference on a later
+    // reconnect (e.g. navigating back to this dashboard view) without
+    // redefining it, since _buildShell() itself only ever runs once.
+    this._onVisibilityChangeForWishlist = () => {
+      if (document.visibilityState === "visible") this._fetchWishlist();
+    };
+    document.addEventListener("visibilitychange", this._onVisibilityChangeForWishlist);
   }
 
   _updateRelativeTime() {
